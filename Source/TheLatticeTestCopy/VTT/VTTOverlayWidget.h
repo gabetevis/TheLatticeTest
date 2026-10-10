@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Brushes/SlateColorBrush.h"
+#include "Styling/SlateBrush.h"
 #include "Fonts/SlateFontInfo.h"
 #include "VTTOverlayWidget.generated.h"
 
@@ -87,5 +87,6 @@ private:
 
 	FSlateFontInfo LabelFont;
 	FSlateFontInfo BodyFont;
-	FSlateColorBrush WhiteBrush;
+	/** Solid white brush for boxes. Plain FSlateBrush because UObject members must be default-constructible. */
+	FSlateBrush WhiteBrush;
 };

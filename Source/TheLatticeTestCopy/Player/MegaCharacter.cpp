@@ -125,8 +125,8 @@ void AMegaCharacter::Input_Look(const FInputActionValue& Value)
 	FRotator Rotation = Controller->GetControlRotation();
 	Rotation.Yaw += Axis.X * LookSensitivity;
 	Rotation.Pitch = FMath::Clamp(
-		FRotator::NormalizeAxis(Rotation.Pitch + Axis.Y * LookSensitivity * (bInvertLookY ? -1.f : 1.f)),
-		-89.f, 89.f);
+		FRotator::NormalizeAxis(Rotation.Pitch + Axis.Y * LookSensitivity * (bInvertLookY ? -1.0 : 1.0)),
+		-89.0, 89.0);
 	Rotation.Roll = 0.f;
 	Controller->SetControlRotation(Rotation);
 }
@@ -188,7 +188,7 @@ void AMegaCharacter::Tick(float DeltaSeconds)
 
 	if (MegaMovement && MegaMovement->IsFalling())
 	{
-		LastFallSpeed = FMath::Max(0.f, -GetVelocity().Z);
+		LastFallSpeed = FMath::Max(0.f, static_cast<float>(-GetVelocity().Z));
 	}
 
 	UpdateCamera(DeltaSeconds);
@@ -216,13 +216,13 @@ void AMegaCharacter::UpdateCamera(float DeltaSeconds)
 	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, SmoothedEyeHeightAboveFeet - HalfHeight + LandingDipOffset));
 
 	// FOV widens with horizontal speed.
-	const float Speed = GetVelocity().Size2D();
+	const float Speed = static_cast<float>(GetVelocity().Size2D());
 	const float SpeedAlpha = FMath::Clamp((Speed - FOVBonusStartSpeed) / FMath::Max(1.f, FOVBonusFullSpeed - FOVBonusStartSpeed), 0.f, 1.f);
 	const float TargetFOV = BaseFieldOfView + SpeedAlpha * MaxSpeedFOVBonus;
 	FirstPersonCamera->SetFieldOfView(FMath::FInterpTo(FirstPersonCamera->FieldOfView, TargetFOV, DeltaSeconds, FOVInterpSpeed));
 
 	// Roll: tilt into strafes, and harder while sliding.
-	const float StrafeAmount = FVector::DotProduct(GetLastMovementInputVector(), GetActorRightVector());
+	const float StrafeAmount = static_cast<float>(FVector::DotProduct(GetLastMovementInputVector(), GetActorRightVector()));
 	float TargetRoll = StrafeAmount * StrafeRollDegrees;
 	if (MegaMovement && MegaMovement->IsSliding())
 	{
@@ -231,6 +231,6 @@ void AMegaCharacter::UpdateCamera(float DeltaSeconds)
 	CurrentRoll = FMath::FInterpTo(CurrentRoll, TargetRoll, DeltaSeconds, RollInterpSpeed);
 
 	FRotator ViewRotation = GetControlRotation();
-	ViewRotation.Roll = CurrentRoll;
+	ViewRotation.Roll = static_cast<double>(CurrentRoll);
 	FirstPersonCamera->SetWorldRotation(ViewRotation);
 }

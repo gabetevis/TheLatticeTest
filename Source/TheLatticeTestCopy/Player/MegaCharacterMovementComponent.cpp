@@ -79,7 +79,7 @@ void UMegaCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick 
 			{
 				Velocity.X = 0.f;
 				Velocity.Y = 0.f;
-				Velocity.Z = FMath::Min(Velocity.Z, -SlamSpeed);
+				Velocity.Z = FMath::Min(Velocity.Z, static_cast<double>(-SlamSpeed));
 			}
 			else if (!IsMovingOnGround())
 			{
@@ -117,13 +117,13 @@ void UMegaCharacterMovementComponent::CalcVelocity(float DeltaTime, float Fricti
 		const FVector InputDir = GetCurrentAcceleration().GetSafeNormal2D();
 		if (!InputDir.IsNearlyZero() && SlideSteerDegreesPerSecond > 0.f)
 		{
-			const float Dot = FMath::Clamp(FVector::DotProduct(SlideDirection, InputDir), -1.f, 1.f);
+			const float Dot = FMath::Clamp(static_cast<float>(FVector::DotProduct(SlideDirection, InputDir)), -1.f, 1.f);
 			const float AngleDeg = FMath::RadiansToDegrees(FMath::Acos(Dot));
 
 			// Ignore input pointing mostly backwards; that should not U-turn a slide.
 			if (AngleDeg > KINDA_SMALL_NUMBER && AngleDeg < 120.f)
 			{
-				const float Sign = FMath::Sign(FVector::CrossProduct(SlideDirection, InputDir).Z);
+				const float Sign = FMath::Sign(static_cast<float>(FVector::CrossProduct(SlideDirection, InputDir).Z));
 				const float Step = FMath::Min(AngleDeg, SlideSteerDegreesPerSecond * DeltaTime);
 				SlideDirection = SlideDirection.RotateAngleAxis(Step * Sign, FVector::UpVector).GetSafeNormal2D();
 			}
@@ -359,7 +359,7 @@ void UMegaCharacterMovementComponent::StartSlam()
 	}
 
 	bIsSlamming = true;
-	SlamStartZ = UpdatedComponent->GetComponentLocation().Z;
+	SlamStartZ = static_cast<float>(UpdatedComponent->GetComponentLocation().Z);
 	Velocity = FVector(0.f, 0.f, -SlamSpeed);
 }
 
@@ -373,11 +373,11 @@ void UMegaCharacterMovementComponent::HandleLanded()
 		bIsSlamming = false;
 
 		const FVector Location = UpdatedComponent->GetComponentLocation();
-		LastSlamFallDistance = FMath::Max(0.f, SlamStartZ - Location.Z);
+		LastSlamFallDistance = FMath::Max(0.f, static_cast<float>(SlamStartZ - Location.Z));
 		SlamLandTime = GetWorldTime();
 		Velocity = FVector::ZeroVector;
 
-		const float HalfHeight = CharacterOwner ? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 0.f;
+		const double HalfHeight = CharacterOwner ? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 0.0;
 		OnMegaSlamLanded.Broadcast(Location - FVector(0.f, 0.f, HalfHeight), LastSlamFallDistance);
 	}
 }

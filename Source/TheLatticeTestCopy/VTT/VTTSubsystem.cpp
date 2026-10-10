@@ -290,10 +290,11 @@ bool UVTTSubsystem::TryShowAmbient(bool bForce)
 
 		// Favour what the player is actually looking at: weight rises sharply toward screen center.
 		const FVector ToTarget = (Component->GetVTTWorldBounds().GetCenter() - ViewLocation).GetSafeNormal();
-		const float Centrality = FMath::Pow(FMath::Max(0.f, FVector::DotProduct(ViewDirection, ToTarget)), 8.f);
+		const float Facing = static_cast<float>(FVector::DotProduct(ViewDirection, ToTarget));
+		const float Centrality = FMath::Pow(FMath::Max(0.f, Facing), 8.f);
 		const float Weight = FMath::Max(Component->AmbientWeight, 0.01f) * (0.1f + Centrality);
 
-		Candidates.Add({ Component, EntryIndex, Weight });
+		Candidates.Add(FCandidate{ Component, EntryIndex, Weight });
 		TotalWeight += Weight;
 	}
 

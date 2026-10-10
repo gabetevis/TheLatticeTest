@@ -1,6 +1,7 @@
 #include "VTT/VTTOverlayWidget.h"
 
 #include "Blueprint/WidgetLayoutLibrary.h"
+#include "Brushes/SlateColorBrush.h"
 #include "Engine/Font.h"
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
@@ -78,8 +79,8 @@ namespace VTTDraw
 
 UVTTOverlayWidget::UVTTOverlayWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, WhiteBrush(FLinearColor::White)
 {
+	WhiteBrush = FSlateColorBrush(FLinearColor::White);
 }
 
 void UVTTOverlayWidget::NativeConstruct()
@@ -213,8 +214,9 @@ void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, int32 Sta
 	// Pad, enforce a minimum size, keep on screen.
 	FVector2D Center = TargetRect.GetCenter();
 	FVector2D HalfSize = TargetRect.GetExtent() + FVector2D(Settings->BoxPadding);
-	HalfSize.X = FMath::Max(HalfSize.X, Settings->MinBoxSize * 0.5f);
-	HalfSize.Y = FMath::Max(HalfSize.Y, Settings->MinBoxSize * 0.5f);
+	const double MinHalfSize = Settings->MinBoxSize * 0.5;
+	HalfSize.X = FMath::Max(HalfSize.X, MinHalfSize);
+	HalfSize.Y = FMath::Max(HalfSize.Y, MinHalfSize);
 	FBox2D Rect(Center - HalfSize, Center + HalfSize);
 	Rect.Min = FVector2D::Max(Rect.Min, FVector2D::ZeroVector);
 	Rect.Max = FVector2D::Min(Rect.Max, ViewSize);
@@ -324,7 +326,7 @@ void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, int32 Sta
 		AddPolyline(MoveTemp(Points), WithAlpha(Settings->FrameColor, Alpha), Settings->LineThickness);
 
 		// Small square marking where the line leaves the frame.
-		RectDraws.Add({ Anchor - FVector2D(2.f), FVector2D(4.f), WithAlpha(Settings->FrameColor, Alpha) });
+		RectDraws.Add(FRectDraw{ Anchor - FVector2D(2.f), FVector2D(4.f), WithAlpha(Settings->FrameColor, Alpha) });
 	}
 
 	if (Age < TypeStart && !Callout.bDismissing)
@@ -337,7 +339,7 @@ void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, int32 Sta
 	{
 		const FVector2D BackdropPos(TextX - Pad, LabelTop - Pad);
 		const FVector2D BackdropSize(Layout.BlockWidth + 2.f * Pad, (BodyTop + BodyHeight) - LabelTop + 2.f * Pad);
-		RectDraws.Insert({ BackdropPos, BackdropSize, WithAlpha(Settings->TextBackdropColor, Alpha) }, 0);
+		RectDraws.Insert(FRectDraw{ BackdropPos, BackdropSize, WithAlpha(Settings->TextBackdropColor, Alpha) }, 0);
 	}
 
 	const bool bFullyRevealed = Callout.bDismissing;
@@ -384,7 +386,8 @@ void UVTTOverlayWidget::AddFrame(const FBox2D& Rect, float Alpha)
 
 	// Solid corner brackets.
 	const FVector2D Size = Rect.GetSize();
-	const float Corner = FMath::Min3(Settings->CornerLength, Size.X * 0.5f, Size.Y * 0.5f);
+	// FVector2D is double precision in UE5, so cast before mixing with float settings.
+	const float Corner = FMath::Min3(Settings->CornerLength, static_cast<float>(Size.X) * 0.5f, static_cast<float>(Size.Y) * 0.5f);
 	const FLinearColor Color = WithAlpha(Settings->FrameColor, Alpha);
 	const float Thickness = Settings->FrameThickness;
 
@@ -415,7 +418,7 @@ void UVTTOverlayWidget::AddTextLines(const TArray<FString>& Lines, const FVector
 
 		if (bFullyRevealed || InOutCharBudget >= Line.Len())
 		{
-			TextDraws.Add({ Position, DrawSize, Line, bLabelFont, WithAlpha(Color, Alpha) });
+			TextDraws.Add(FTextDraw{ Position, DrawSize, Line, bLabelFont, WithAlpha(Color, Alpha) });
 			InOutCharBudget -= Line.Len();
 			continue;
 		}
@@ -426,13 +429,13 @@ void UVTTOverlayWidget::AddTextLines(const TArray<FString>& Lines, const FVector
 
 		if (!Revealed.IsEmpty())
 		{
-			TextDraws.Add({ Position, DrawSize, Revealed, bLabelFont, WithAlpha(Color, Alpha) });
+			TextDraws.Add(FTextDraw{ Position, DrawSize, Revealed, bLabelFont, WithAlpha(Color, Alpha) });
 		}
 		if (NumScrambled > 0)
 		{
 			const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
 			const float Offset = Revealed.IsEmpty() ? 0.f : static_cast<float>(Measure->Measure(Revealed, Font).X);
-			TextDraws.Add({ Position + FVector2D(Offset, 0.f), DrawSize, Scramble(Line.Mid(InOutCharBudget, NumScrambled)),
+			TextDraws.Add(FTextDraw{ Position + FVector2D(Offset, 0.f), DrawSize, Scramble(Line.Mid(InOutCharBudget, NumScrambled)),
 				bLabelFont, WithAlpha(Settings->ScrambleColor, Alpha) });
 		}
 
