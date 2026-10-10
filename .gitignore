@@ -1,0 +1,24 @@
+# Unreal generated / per-machine
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+Packaged/
+.vs/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.idea/
+.vscode/
+
+# Plugin build output
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+
+# OS
+Thumbs.db
+.DS_Store
