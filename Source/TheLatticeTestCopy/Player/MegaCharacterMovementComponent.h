@@ -137,21 +137,42 @@ public:
 	float DashJumpStaminaCost = 1.f;
 
 	//~ Tuning: Slide / crouch ------------------------------------------------------------------
+	//
+	// A slide is real physics on the floor it's on: it starts with a kick (SlideSpeed), loses
+	// speed to friction, and gravity along the slope speeds it up downhill / slows it uphill.
+	// Speed carried in from a dash or grapple sits on top as a boost that holds briefly, then fades.
+	// When the slide runs out of speed it turns into a crouch (until the button is pressed again).
 
-	/** Base slide speed. Slides never drop below this while held. */
+	/** Starting speed of a slide from a standstill or walk. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
 	float SlideSpeed = 1700.f;
 
-	/** Cap on how much carried speed a slide can start with. */
+	/** Constant slowdown while sliding. With the default gravity, slopes steeper than ~12 degrees overcome it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
+	float SlideFriction = 450.f;
+
+	/** How strongly slopes speed up / slow down a slide. 1 = real gravity (incl. GravityScale). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0"))
+	float SlideGravityScale = 1.f;
+
+	/** Slides can't get faster than this from slopes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
+	float SlideMaxSpeed = 5000.f;
+
+	/** Below this speed the slide ends and becomes a crouch. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
+	float SlideMinSpeed = 350.f;
+
+	/** Cap on how much carried speed (dash, grapple, fall) a slide can start with. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
 	float SlideMaxEntrySpeed = 3200.f;
 
-	/** Carried speed above SlideSpeed is held this long before it starts bleeding off. */
+	/** Carried speed above SlideSpeed is held this long before it starts fading. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="s"))
 	float SlideMomentumHoldTime = 0.3f;
 
-	/** How fast carried speed bleeds back down to SlideSpeed after the hold time. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
+	/** How fast carried speed fades after the hold time (on top of friction). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
 	float SlideMomentumDecay = 2000.f;
 
 	/** Without movement input, the slide button only slides when moving faster than this; otherwise it crouches. */
@@ -268,6 +289,8 @@ private:
 	void UpdateGrapple(float DeltaTime);
 	void UpdateMomentumMemory();
 
+	void UpdateSlide(float DeltaTime);
+
 	/** Slide if moving (input or carried speed), crouch otherwise. Ground only. */
 	void BeginGroundSlideOrCrouch();
 	bool WantsToSlide() const;
@@ -296,9 +319,15 @@ private:
 	float DashTimeRemaining = 0.f;
 	FVector DashDirection = FVector::ForwardVector;
 
+	/** Slide velocity from friction + slope physics (horizontal). Its direction is the slide direction. */
+	FVector SlideBaseVelocity = FVector::ZeroVector;
+	/** Carried speed on top of the base, fading after SlideMomentumHoldTime. */
+	float SlideBoostSpeed = 0.f;
 	FVector SlideDirection = FVector::ForwardVector;
 	float CurrentSlideSpeed = 0.f;
 	float SlideStartTime = 0.f;
+	/** Set when a slide runs out of speed while held; blocks re-sliding until the button is released. */
+	bool bSlideExhausted = false;
 
 	float MomentumSpeed = 0.f;
 	FVector MomentumDirection = FVector::ForwardVector;

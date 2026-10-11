@@ -45,8 +45,18 @@ private:
 		float BodyLineHeight = 0.f;
 		float BlockWidth = 0.f;
 		float BlockHeight = 0.f;
-		/** +1 = line/text to the right of the box, -1 = left. Locked so it never flips mid-read. */
-		int32 Side = 0;
+		/** Current line direction (degrees, 0 = right, 90 = up). Eases toward the best direction each frame. */
+		float AngleDeg = 0.f;
+		bool bAngleInitialized = false;
+	};
+
+	/** Where the line and text go for one candidate direction. */
+	struct FCalloutPlacement
+	{
+		FVector2D LineStart;
+		FVector2D LineEnd;
+		FBox2D TextRect;
+		FVector2D Direction;
 	};
 
 	struct FRectDraw
@@ -73,7 +83,13 @@ private:
 	};
 
 	void RefreshFonts();
-	void BuildCallout(const FVTTActiveCallout& Callout, const FVector2D& ViewSize, APlayerController* Controller);
+	void BuildCallout(const FVTTActiveCallout& Callout, const FVector2D& ViewSize, APlayerController* Controller, float DeltaTime);
+
+	/** Line from the box edge in direction AngleDeg, and the text block hanging off its end. */
+	static FCalloutPlacement ComputePlacement(const FBox2D& Rect, float AngleDeg, const FCalloutLayout& Layout);
+
+	/** Best line direction for this box right now (lower score = better). */
+	static float ChooseAngle(const FBox2D& Rect, const FVector2D& ViewSize, const FCalloutLayout& Layout);
 	bool ProjectBounds(const FBox& WorldBounds, APlayerController* Controller, FBox2D& OutRect) const;
 	FCalloutLayout& GetOrBuildLayout(const FVTTActiveCallout& Callout);
 
@@ -81,8 +97,9 @@ private:
 	void AddBox(const FBox2D& Rect, const FLinearColor& Color, float Thickness);
 
 	/** Adds lines of text, revealing at most InOutCharBudget characters (typewriter). */
+	/** Align: 0 = left, 0.5 = centered, 1 = right (blended continuously as the line swings around). */
 	void AddTextLines(const TArray<FString>& Lines, const TArray<float>& Widths, float LineHeight, bool bLabel,
-		float Left, float Top, float BlockWidth, bool bAlignRight, const FLinearColor& Color, int32& InOutCharBudget);
+		float Left, float Top, float BlockWidth, float Align, const FLinearColor& Color, int32& InOutCharBudget);
 
 	TMap<int32, FCalloutLayout> Layouts;
 

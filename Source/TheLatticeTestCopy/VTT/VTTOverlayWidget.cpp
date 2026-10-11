@@ -141,7 +141,7 @@ void UVTTOverlayWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 
 	for (const FVTTActiveCallout& Callout : Callouts)
 	{
-		BuildCallout(Callout, MyGeometry.GetLocalSize(), Controller);
+		BuildCallout(Callout, MyGeometry.GetLocalSize(), Controller, InDeltaTime);
 	}
 }
 
@@ -192,7 +192,7 @@ UVTTOverlayWidget::FCalloutLayout& UVTTOverlayWidget::GetOrBuildLayout(const FVT
 	return Layout;
 }
 
-void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, const FVector2D& ViewSize, APlayerController* Controller)
+void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, const FVector2D& ViewSize, APlayerController* Controller, float DeltaTime)
 {
 	using namespace VTTDraw;
 
@@ -236,49 +236,136 @@ void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, const FVe
 		return;
 	}
 
-	// --- Side: toward the emptier half of the screen, unless the text wouldn't fit there ---
+	// --- Direction: glide around the box toward open screen space ---
 	FCalloutLayout& Layout = GetOrBuildLayout(Callout);
-	const float AngleRad = FMath::DegreesToRadians(Settings->LineAngleDegrees);
-	const double Reach = Settings->LineLength * FMath::Cos(AngleRad) + Settings->TextGap + Layout.BlockWidth;
-	if (Layout.Side == 0)
+	if (!Layout.bAngleInitialized)
 	{
-		Layout.Side = Center.X < ViewSize.X * 0.5 ? 1 : -1;
-		const bool bFitsRight = Rect.Max.X + Reach <= ViewSize.X;
-		const bool bFitsLeft = Rect.Min.X - Reach >= 0.0;
-		if (Layout.Side > 0 && !bFitsRight && bFitsLeft) { Layout.Side = -1; }
-		if (Layout.Side < 0 && !bFitsLeft && bFitsRight) { Layout.Side = 1; }
+		Layout.AngleDeg = Settings->bFollowOpenSpace ? ChooseAngle(Rect, ViewSize, Layout) : Settings->LineAngleDegrees;
+		Layout.bAngleInitialized = true;
 	}
-	const double Side = static_cast<double>(Layout.Side);
+	else if (Settings->bFollowOpenSpace && !Callout.bDismissing)
+	{
+		const float TargetAngle = ChooseAngle(Rect, ViewSize, Layout);
+		const float Delta = FMath::FindDeltaAngleDegrees(Layout.AngleDeg, TargetAngle);
+		Layout.AngleDeg = static_cast<float>(FRotator::NormalizeAxis(Layout.AngleDeg + Delta * FMath::Min(1.f, DeltaTime * Settings->LineTurnSpeed)));
+	}
 
-	// --- Line: straight off the middle of the box's side ---
-	const FVector2D LineStart(Layout.Side > 0 ? Rect.Max.X : Rect.Min.X, Center.Y);
-	const FVector2D LineDirection(Side * FMath::Cos(AngleRad), -FMath::Sin(AngleRad));
-	const FVector2D LineEnd = LineStart + LineDirection * Settings->LineLength;
-	const FVector2D DrawnEnd = Callout.bDismissing ? LineEnd : FMath::Lerp(LineStart, LineEnd, FMath::Clamp(LineT, 0.f, 1.f));
-	LineDraws.Add(FLineDraw{ LineStart, DrawnEnd, Color, Settings->LineThickness });
+	const FCalloutPlacement Placement = ComputePlacement(Rect, Layout.AngleDeg, Layout);
+
+	// --- Line: from the box edge outward, extending during the line intro ---
+	const FVector2D DrawnEnd = Callout.bDismissing
+		? Placement.LineEnd
+		: FMath::Lerp(Placement.LineStart, Placement.LineEnd, FMath::Clamp(LineT, 0.f, 1.f));
+	LineDraws.Add(FLineDraw{ Placement.LineStart, DrawnEnd, Color, Settings->LineThickness });
 
 	if (Age < TypeStart && !Callout.bDismissing)
 	{
 		return;
 	}
 
-	// --- Text: vertically centered on the line end, kept on screen ---
+	// --- Text: hangs off the line end, kept on screen ---
 	constexpr double ScreenMargin = 8.0;
-	double Left = Layout.Side > 0 ? LineEnd.X + Settings->TextGap : LineEnd.X - Settings->TextGap - Layout.BlockWidth;
-	double Top = LineEnd.Y - Layout.BlockHeight * 0.5;
-	Left = FMath::Clamp(Left, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.X - ScreenMargin - Layout.BlockWidth));
-	Top = FMath::Clamp(Top, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.Y - ScreenMargin - Layout.BlockHeight));
+	const double Left = FMath::Clamp(Placement.TextRect.Min.X, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.X - ScreenMargin - Layout.BlockWidth));
+	const double Top = FMath::Clamp(Placement.TextRect.Min.Y, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.Y - ScreenMargin - Layout.BlockHeight));
 
 	int32 CharBudget = (Settings->bTypewriter && !Callout.bDismissing)
 		? FMath::FloorToInt((Age - TypeStart) * Settings->CharactersPerSecond)
 		: MAX_int32;
 
-	const bool bAlignRight = Layout.Side < 0; // text hugs the line end on either side
+	// Line pointing right -> left-aligned text, left -> right-aligned, up/down -> centered; blended.
+	const float Align = FMath::Clamp(0.5f - static_cast<float>(Placement.Direction.X), 0.f, 1.f);
 	AddTextLines(Layout.LabelLines, Layout.LabelLineWidths, Layout.LabelLineHeight, /*bLabel*/ true,
-		static_cast<float>(Left), static_cast<float>(Top), Layout.BlockWidth, bAlignRight, Color, CharBudget);
+		static_cast<float>(Left), static_cast<float>(Top), Layout.BlockWidth, Align, Color, CharBudget);
 	AddTextLines(Layout.BodyLines, Layout.BodyLineWidths, Layout.BodyLineHeight, /*bLabel*/ false,
 		static_cast<float>(Left), static_cast<float>(Top + Layout.LabelLines.Num() * Layout.LabelLineHeight),
-		Layout.BlockWidth, bAlignRight, Color, CharBudget);
+		Layout.BlockWidth, Align, Color, CharBudget);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------------------------
+
+UVTTOverlayWidget::FCalloutPlacement UVTTOverlayWidget::ComputePlacement(const FBox2D& Rect, float AngleDeg, const FCalloutLayout& Layout)
+{
+	const UVTTSettings* Settings = UVTTSettings::Get();
+	const float AngleRad = FMath::DegreesToRadians(AngleDeg);
+
+	FCalloutPlacement Placement;
+	Placement.Direction = FVector2D(FMath::Cos(AngleRad), -FMath::Sin(AngleRad)); // screen Y points down
+
+	// Distance from a box/block center to its edge along a direction.
+	auto DistanceToEdge = [](const FVector2D& Dir, double HalfWidth, double HalfHeight)
+	{
+		const double TX = FMath::Abs(Dir.X) > UE_KINDA_SMALL_NUMBER ? HalfWidth / FMath::Abs(Dir.X) : UE_BIG_NUMBER;
+		const double TY = FMath::Abs(Dir.Y) > UE_KINDA_SMALL_NUMBER ? HalfHeight / FMath::Abs(Dir.Y) : UE_BIG_NUMBER;
+		return FMath::Min(TX, TY);
+	};
+
+	const FVector2D Center = Rect.GetCenter();
+	const FVector2D HalfBox = Rect.GetExtent();
+	Placement.LineStart = Center + Placement.Direction * DistanceToEdge(Placement.Direction, HalfBox.X, HalfBox.Y);
+	Placement.LineEnd = Placement.LineStart + Placement.Direction * Settings->LineLength;
+
+	// Text block placed so the side facing the line sits TextGap past the line end.
+	const FVector2D HalfText(Layout.BlockWidth * 0.5, Layout.BlockHeight * 0.5);
+	const FVector2D Anchor = Placement.LineEnd + Placement.Direction * Settings->TextGap;
+	const FVector2D TextCenter = Anchor + Placement.Direction * DistanceToEdge(Placement.Direction, HalfText.X, HalfText.Y);
+	Placement.TextRect = FBox2D(TextCenter - HalfText, TextCenter + HalfText);
+	return Placement;
+}
+
+float UVTTOverlayWidget::ChooseAngle(const FBox2D& Rect, const FVector2D& ViewSize, const FCalloutLayout& Layout)
+{
+	const UVTTSettings* Settings = UVTTSettings::Get();
+	constexpr double Margin = 8.0;
+
+	// Preferred direction, pulled toward the screen center the further the box is from it.
+	const FVector2D ScreenCenter = ViewSize * 0.5;
+	const FVector2D ToCenter = ScreenCenter - Rect.GetCenter();
+	const float TowardCenterDeg = FMath::RadiansToDegrees(FMath::Atan2(static_cast<float>(-ToCenter.Y), static_cast<float>(ToCenter.X)));
+	const double EdgeFactor = FMath::Clamp(ToCenter.Size() / (0.35 * FMath::Min(ViewSize.X, ViewSize.Y)), 0.0, 1.0);
+	const float CenterWeight = static_cast<float>(EdgeFactor) * Settings->PullTowardScreenCenter;
+
+	auto AngleDistance = [](float A, float B) { return FMath::Abs(FMath::FindDeltaAngleDegrees(A, B)) / 180.f; };
+
+	float BestAngle = Layout.bAngleInitialized ? Layout.AngleDeg : Settings->LineAngleDegrees;
+	float BestScore = TNumericLimits<float>::Max();
+
+	constexpr int32 NumCandidates = 36; // every 10 degrees
+	for (int32 i = 0; i <= NumCandidates; ++i)
+	{
+		// Last candidate is the current angle, so staying put is always an option.
+		const float Angle = i < NumCandidates ? -180.f + i * (360.f / NumCandidates) : BestAngle;
+		const FCalloutPlacement P = ComputePlacement(Rect, Angle, Layout);
+
+		// How far the text and line end poke off screen (pixels).
+		const double Overflow =
+			FMath::Max(0.0, Margin - P.TextRect.Min.X) + FMath::Max(0.0, P.TextRect.Max.X - (ViewSize.X - Margin)) +
+			FMath::Max(0.0, Margin - P.TextRect.Min.Y) + FMath::Max(0.0, P.TextRect.Max.Y - (ViewSize.Y - Margin)) +
+			FMath::Max(0.0, -P.LineEnd.X) + FMath::Max(0.0, P.LineEnd.X - ViewSize.X) +
+			FMath::Max(0.0, -P.LineEnd.Y) + FMath::Max(0.0, P.LineEnd.Y - ViewSize.Y);
+
+		// Text covering the framed object is bad too.
+		double Overlap = 0.0;
+		if (P.TextRect.Intersect(Rect))
+		{
+			const FVector2D OverlapSize = FVector2D::Min(P.TextRect.Max, Rect.Max) - FVector2D::Max(P.TextRect.Min, Rect.Min);
+			Overlap = FMath::Max(0.0, OverlapSize.X) * FMath::Max(0.0, OverlapSize.Y);
+		}
+
+		const float Score =
+			static_cast<float>(Overflow * 0.05 + Overlap * 0.0005) +
+			AngleDistance(Angle, Settings->LineAngleDegrees) * (1.f - CenterWeight) +
+			AngleDistance(Angle, TowardCenterDeg) * CenterWeight +
+			(Layout.bAngleInitialized ? AngleDistance(Angle, Layout.AngleDeg) * 0.6f : 0.f); // stickiness: no jitter
+
+		if (Score < BestScore)
+		{
+			BestScore = Score;
+			BestAngle = Angle;
+		}
+	}
+	return BestAngle;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -300,15 +387,15 @@ void UVTTOverlayWidget::AddBox(const FBox2D& Rect, const FLinearColor& Color, fl
 }
 
 void UVTTOverlayWidget::AddTextLines(const TArray<FString>& Lines, const TArray<float>& Widths, float LineHeight, bool bLabel,
-	float Left, float Top, float BlockWidth, bool bAlignRight, const FLinearColor& Color, int32& InOutCharBudget)
+	float Left, float Top, float BlockWidth, float Align, const FLinearColor& Color, int32& InOutCharBudget)
 {
 	for (int32 LineIndex = 0; LineIndex < Lines.Num() && InOutCharBudget > 0; ++LineIndex)
 	{
 		const FString& Line = Lines[LineIndex];
-		const float X = bAlignRight ? Left + BlockWidth - Widths[LineIndex] : Left;
+		const float X = Left + (BlockWidth - Widths[LineIndex]) * Align;
 		const FVector2D Position(X, Top + LineIndex * LineHeight);
 
-		// Typewriter: reveal from the left. Right-aligned lines keep their final position.
+		// Typewriter: reveal from the left. Lines keep their final position while typing.
 		const FString Visible = InOutCharBudget >= Line.Len() ? Line : Line.Left(InOutCharBudget);
 		if (!Visible.IsEmpty())
 		{

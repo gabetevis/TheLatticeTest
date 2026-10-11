@@ -1,4 +1,4 @@
-// Grapple hook: aiming, cable visuals and cooldown. The pull itself lives in UMegaCharacterMovementComponent.
+// Grapple hook: aiming, rope visuals and cooldown. The pull itself lives in UMegaCharacterMovementComponent.
 
 #pragma once
 
@@ -7,20 +7,25 @@
 #include "Engine/EngineTypes.h"
 #include "MegaGrappleComponent.generated.h"
 
-class UCableComponent;
 class UMaterialInterface;
 class UMegaCharacterMovementComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMegaGrappleFiredSignature, FVector, AnchorLocation);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMegaGrappleMissedSignature);
 
 /**
- * Ported from the old BP_FirstPersonCharacter grapple (F key, trace, cable, cooldown,
+ * Ported from the old BP_FirstPersonCharacter grapple (F key, trace, rope, cooldown,
  * Burst / Accelerating pull, release on hit).
  *
- * Attach to the first-person camera: this component's location is where the cable starts
+ * Attach to the first-person camera: this component's location is where the rope starts
  * (the "hand"). Pull physics and tuning (mode, speed, acceleration) are on the movement
  * component under Mega|Grapple, so all movement numbers live in one place.
+ *
+ * The rope is a straight mesh (a cylinder by default) stretched from the hand to the anchor
+ * every frame after movement, so it always lines up exactly. It shoots out when fired and
+ * snaps back when released; that animation is visual only, the pull starts immediately.
  */
 UCLASS(ClassGroup=(Movement), meta=(BlueprintSpawnableComponent))
 class THELATTICETESTCOPY_API UMegaGrappleComponent : public USceneComponent
@@ -62,17 +67,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple")
 	bool bHoldToGrapple = false;
 
-	//~ Cable look ------------------------------------------------------------------------------
+	//~ Rope look -------------------------------------------------------------------------------
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Cable")
-	TObjectPtr<UMaterialInterface> CableMaterial;
+	/** Mesh stretched along the rope. Must be 100 units long on its Z axis with the pivot at its center (like the engine Cylinder). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Rope")
+	TObjectPtr<UStaticMesh> RopeMesh;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Cable", meta=(ClampMin="0.1", ForceUnits="cm"))
-	float CableWidth = 3.f;
+	/** Empty = the mesh's own material. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Rope")
+	TObjectPtr<UMaterialInterface> RopeMaterial;
 
-	/** Burst mode: how long the cable stays visible after the launch. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Cable", meta=(ClampMin="0", ForceUnits="s"))
-	float BurstCableVisibleTime = 0.2f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Rope", meta=(ClampMin="0.1", ForceUnits="cm"))
+	float RopeWidth = 3.f;
+
+	/** How fast the rope tip travels out when fired and back when released. Visual only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Rope", meta=(ClampMin="1", ForceUnits="cm/s"))
+	float RopeShootSpeed = 25000.f;
+
+	/** Burst mode: how long the rope stays attached (visually) after the launch. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple|Rope", meta=(ClampMin="0", ForceUnits="s"))
+	float BurstRopeVisibleTime = 0.2f;
 
 protected:
 	virtual void BeginPlay() override;
@@ -83,17 +97,20 @@ private:
 	void HandleGrappleChanged(bool bIsGrappling);
 
 	bool TraceForAnchor(FHitResult& OutHit) const;
-	void ShowCable(const FVector& WorldPoint);
-	void HideCable();
+	void UpdateRope(float DeltaTime);
 	float GetWorldTime() const;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UCableComponent> Cable;
+	TObjectPtr<UStaticMeshComponent> Rope;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMegaCharacterMovementComponent> Movement;
 
-	FVector BurstCablePoint = FVector::ZeroVector;
-	float BurstCableHideTime = -1.f;
+	/** Where the rope is heading (live anchor while grappling, last anchor while retracting). */
+	FVector RopeTarget = FVector::ZeroVector;
+	/** Current rope length, animated toward the full distance (out) or zero (back). */
+	float RopeExtension = 0.f;
+	bool bRopeAttached = false;
+	float BurstRopeReleaseTime = -1.f;
 	float CooldownEndTime = -1.f;
 };

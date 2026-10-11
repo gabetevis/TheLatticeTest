@@ -25,7 +25,7 @@ Source/TheLatticeTestCopy/
   Player/
     MegaCharacter            input, camera feel, owns the movement component
     MegaCharacterMovementComponent   dash / slide / crouch / slam / wall jump / grapple pull / momentum
-    MegaGrappleComponent     grapple aim trace, cable visual, cooldown (ported from BP_FirstPersonCharacter)
+    MegaGrappleComponent     grapple aim trace, rope visual, cooldown (ported from BP_FirstPersonCharacter)
     MegaPlayerController     creates the VTT overlay (the only HUD)
     MegaDefaultInput         code-built Enhanced Input fallback (no assets required)
   VTT/
@@ -54,7 +54,7 @@ class per file pair, folder = feature. Includes are module-root relative, e.g.
 |---|---|---|
 | `AMegaCharacter` | Input binding, look, jump buffering, camera (eye height, FOV, roll, landing dip), first-person arms mesh | Movement rules |
 | `UMegaCharacterMovementComponent` | All movement rules and state (incl. grapple pull + tuning); movement events | Input, camera |
-| `UMegaGrappleComponent` | Grapple aiming, cable, cooldown, hold/toggle | Pull physics |
+| `UMegaGrappleComponent` | Grapple aiming, rope visual, cooldown, hold/toggle | Pull physics |
 | `AMegaPlayerController` | HUD/UI lifetime (VTT overlay), input mode | Gameplay |
 
 ### Movement model
@@ -67,21 +67,28 @@ ledges. This is why there is no `PhysCustom`.
 
 **Momentum carry:** the component remembers the fastest horizontal speed of the last
 `MomentumGraceTime` (0.25s). A slide starts at that remembered speed (capped at
-`SlideMaxEntrySpeed`), holds it for `SlideMomentumHoldTime` (0.3s), then bleeds down to
-`SlideSpeed` at `SlideMomentumDecay`. So dash → slide, grapple → slide and air → slide keep
-their speed for about a second. Slide-jumps launch at the current (boosted) slide speed.
-A slam clears the memory on purpose.
+`SlideMaxEntrySpeed`). Speed above `SlideSpeed` becomes a *boost* that holds for
+`SlideMomentumHoldTime` (0.3s) then fades at `SlideMomentumDecay`. So dash → slide, grapple →
+slide and air → slide keep their speed for about a second. Slide-jumps launch at the current
+slide speed. A slam clears the memory on purpose.
+
+**Slide physics:** under the boost, the slide has a *base* velocity that starts at `SlideSpeed`,
+loses `SlideFriction` (450 cm/s²) and gains gravity along the floor (`g·sinθ·cosθ` horizontally,
+scaled by `SlideGravityScale`). Flat or uphill → it dies out; slopes steeper than ~12° → it
+accelerates (cap `SlideMaxSpeed`). The slope can also curve the slide downhill. Below
+`SlideMinSpeed` the slide becomes a crouch and won't restart until Ctrl is re-pressed
+(`bSlideExhausted`; jumping also clears it).
 
 | Action | Input | Behaviour |
 |---|---|---|
 | Move | WASD / left stick | Fast accel/decel, air momentum preserved |
 | Jump | Space / A | Ground, coyote (0.12s), wall (3 per airtime), slide-jump, dash-jump, slam-jump; buffered 0.12s |
 | Dash | Shift / LB | 3 stamina charges, horizontal only, gravity off for 0.18s |
-| Slide | Ctrl / B (ground, hold, while moving) | Moving = WASD held or carried speed > 1300. Carries momentum, light steering |
+| Slide | Ctrl / B (ground, hold, while moving) | Moving = WASD held or carried speed > 1300. Carries momentum, friction + slope physics, light steering |
 | Crouch | Ctrl / B (ground, hold, while still) | Engine crouch, 450 cm/s crouch-walk |
 | Slam | Ctrl / B (air, press) | Straight down; jump within 0.25s of landing = slam jump scaled by fall height |
 | Wall cling | Push into wall while falling | Caps fall speed |
-| Grapple | F / RB | Sphere trace 4000cm from the eyes. Accelerating mode (default): steer + accelerate to 3500 cm/s, gravity off, auto-release at 200cm or on head-on impact; Burst mode: one launch. Jump = release with a hop; dash/slam cancel; press again to release. 0.4s cooldown |
+| Grapple | F / RB | Sphere trace 4000cm from the eyes. Accelerating mode (default): steer + accelerate to 3500 cm/s, gravity off, auto-release at 200cm or on head-on impact; Burst mode: one launch. Jump = release with a hop; dash/slam cancel; press again to release. 0.4s cooldown. Rope = engine Cylinder stretched hand→anchor every frame (TG_PostPhysics), shoots out/retracts at 25000 cm/s (visual only) |
 
 Events for feedback hookup: `OnMegaJumped(type)`, `OnMegaDashed(dir)`,
 `OnMegaSlideChanged(bool)`, `OnMegaSlamLanded(location, fallDistance)`, `OnMegaGrappleChanged(bool)`;
@@ -105,7 +112,7 @@ doesn't depend on the project's legacy input-scale settings.
 ## 3. VTT (Virtual Text Translator)
 
 The only HUD. Deliberately simple: a thick box around a world object, one thick straight line
-off the middle of its side, and large bold text at the end of the line (optional small Label
+off the box edge, and large bold text at the end of the line (optional small Label
 above it). One color for all three — project-wide in settings, overridable per VTT component
 (`bOverrideColor` / `Color`, or `SetVTTColor()` at runtime). Typewriter reveal is optional.
 
@@ -134,8 +141,11 @@ UVTTComponent (on actors) ──register──▶ UVTTSubsystem ◀──read ea
     Dismissed early if the target stays unperceived for 0.75s or is destroyed.
 - **`UVTTOverlayWidget`**: pure C++ `UUserWidget`. `NativeTick` builds a draw list, `NativePaint`
   emits Slate boxes/lines/text. The box is four filled bars (clean corners at any thickness).
-  Text side is chosen once per callout (toward the emptier half, flipped if it wouldn't fit) so it
-  never flips mid-read; text is vertically centered on the line end and kept on screen.
+  **Follow open space:** each frame `ChooseAngle` scores 36 directions around the box (text/line
+  off screen, text over the object, distance from `LineAngleDegrees`, pull toward screen center
+  when the object nears an edge, stickiness to the current angle). The callout's angle eases
+  toward the winner (`LineTurnSpeed`), so the line glides along the box edge and the text swings
+  with it as the camera pans. Text alignment blends left → centered → right with the direction.
 - **`UVTTSettings`** (Project Settings → Game → VTT): `Color`, box/line thickness, line length +
   angle, font/typeface/size, outline, typewriter, timings, sounds.
 
@@ -180,6 +190,7 @@ From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->Reques
 
 - [x] Compile + feel pass in the test level
 - [ ] Grapple feel pass (numbers are defaults; old BP values were not recoverable)
+- [ ] Slide slope feel pass (friction / gravity scale)
 - [ ] Grapple crosshair/aim feedback (currently no indicator: no HUD besides VTT)
 - [ ] Movement feedback: camera shake, audio, VFX hooked to movement events
 - [ ] VTT: optional per-entry voice/sound, rich-text emphasis, priority tiers
@@ -198,3 +209,8 @@ From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->Reques
   VTT restyled (thick box / straight line / bold text, single configurable color + per-object
   override); grapple ported from Blueprint to C++ (`MegaGrappleComponent` + movement state, F key,
   CableComponent plugin); old Blueprint VTT removed; MegaGameMode made project default.
+- **2026-10-10** — Grapple rope rebuilt as a stretched mesh (CableComponent end was measured
+  from the capsule, so it drifted); CableComponent dependency removed. Slide now uses friction +
+  slope gravity and turns into a crouch when it dies out. VTT line glides around the box toward
+  open screen space (`bFollowOpenSpace`, `LineTurnSpeed`, `PullTowardScreenCenter`;
+  `LineAngleDegrees` is now the preferred direction, 0 = right, 90 = up).

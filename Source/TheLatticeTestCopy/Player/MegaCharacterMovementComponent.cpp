@@ -72,16 +72,18 @@ void UMegaCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick 
 			EndCrouchHold();
 		}
 
+		// Slide ran out of speed (friction / uphill): become a crouch until the button is pressed again.
+		if (bIsSliding && IsMovingOnGround() && CurrentSlideSpeed < SlideMinSpeed && GetWorldTime() - SlideStartTime > 0.15f)
+		{
+			bSlideExhausted = true;
+			bIsCrouchHeld = true; // set first so EndSlide keeps the capsule crouched
+			EndSlide();
+		}
+
 		// Button held on the ground but not yet sliding/crouching (landing, or a dash just ended).
 		if (bSlideInputHeld && IsMovingOnGround() && !bIsSliding && !bIsCrouchHeld && !bIsDashing && !bIsGrappling)
 		{
 			BeginGroundSlideOrCrouch();
-		}
-
-		// Slide speed: hold carried momentum briefly, then bleed back down to SlideSpeed.
-		if (bIsSliding && CurrentSlideSpeed > SlideSpeed && GetWorldTime() - SlideStartTime > SlideMomentumHoldTime)
-		{
-			CurrentSlideSpeed = FMath::Max(SlideSpeed, CurrentSlideSpeed - SlideMomentumDecay * DeltaTime);
 		}
 
 		// Slam: straight down, no horizontal drift.
@@ -171,21 +173,7 @@ void UMegaCharacterMovementComponent::CalcVelocity(float DeltaTime, float Fricti
 
 	if (bIsSliding && IsMovingOnGround())
 	{
-		const FVector InputDir = GetCurrentAcceleration().GetSafeNormal2D();
-		if (!InputDir.IsNearlyZero() && SlideSteerDegreesPerSecond > 0.f)
-		{
-			const float Dot = FMath::Clamp(static_cast<float>(FVector::DotProduct(SlideDirection, InputDir)), -1.f, 1.f);
-			const float AngleDeg = FMath::RadiansToDegrees(FMath::Acos(Dot));
-
-			// Ignore input pointing mostly backwards; that should not U-turn a slide.
-			if (AngleDeg > KINDA_SMALL_NUMBER && AngleDeg < 120.f)
-			{
-				const float Sign = FMath::Sign(static_cast<float>(FVector::CrossProduct(SlideDirection, InputDir).Z));
-				const float Step = FMath::Min(AngleDeg, SlideSteerDegreesPerSecond * DeltaTime);
-				SlideDirection = SlideDirection.RotateAngleAxis(Step * Sign, FVector::UpVector).GetSafeNormal2D();
-			}
-		}
-
+		UpdateSlide(DeltaTime);
 		Velocity = SlideDirection * CurrentSlideSpeed;
 		return;
 	}
@@ -319,6 +307,7 @@ void UMegaCharacterMovementComponent::LaunchJump(const FVector& NewVelocity, EMe
 	}
 
 	bIsSlamming = false;
+	bSlideExhausted = false; // landing with the button held may slide again
 	SlamLandTime = -1000.f;
 	bJumpedSinceGrounded = true;
 
@@ -410,6 +399,7 @@ void UMegaCharacterMovementComponent::SetSlideInputHeld(bool bHeld)
 	}
 	else
 	{
+		bSlideExhausted = false;
 		if (bIsSliding)
 		{
 			EndSlide();
@@ -423,7 +413,62 @@ void UMegaCharacterMovementComponent::SetSlideInputHeld(bool bHeld)
 
 bool UMegaCharacterMovementComponent::WantsToSlide() const
 {
+	if (bSlideExhausted)
+	{
+		return false;
+	}
 	return !GetMoveInputDirection2D().IsNearlyZero() || GetCarriedSpeed2D() > SlideMinSpeedWithoutInput;
+}
+
+void UMegaCharacterMovementComponent::UpdateSlide(float DeltaTime)
+{
+	// 1. Steering: input bends the slide direction (never into a U-turn).
+	const FVector InputDir = GetCurrentAcceleration().GetSafeNormal2D();
+	if (!InputDir.IsNearlyZero() && SlideSteerDegreesPerSecond > 0.f)
+	{
+		const float Dot = FMath::Clamp(static_cast<float>(FVector::DotProduct(SlideDirection, InputDir)), -1.f, 1.f);
+		const float AngleDeg = FMath::RadiansToDegrees(FMath::Acos(Dot));
+		if (AngleDeg > KINDA_SMALL_NUMBER && AngleDeg < 120.f)
+		{
+			const float Sign = FMath::Sign(static_cast<float>(FVector::CrossProduct(SlideDirection, InputDir).Z));
+			const float Step = FMath::Min(AngleDeg, SlideSteerDegreesPerSecond * DeltaTime);
+			SlideDirection = SlideDirection.RotateAngleAxis(Step * Sign, FVector::UpVector).GetSafeNormal2D();
+		}
+	}
+
+	// 2. Slope: gravity along the floor speeds us up downhill and slows us uphill. On a slope of
+	//    angle a its horizontal part is g*sin(a)*cos(a); on flat ground it is zero.
+	FVector Base = SlideDirection * SlideBaseVelocity.Size2D();
+	if (CurrentFloor.IsWalkableFloor())
+	{
+		const FVector AlongSlope = FVector::VectorPlaneProject(FVector(0.0, 0.0, GetGravityZ()), CurrentFloor.HitResult.ImpactNormal);
+		Base += FVector(AlongSlope.X, AlongSlope.Y, 0.0) * (SlideGravityScale * DeltaTime);
+	}
+
+	// 3. Friction, and never slide backwards: if a slope turned us around, we've stopped.
+	double BaseSpeed = Base.Size2D();
+	if (BaseSpeed > KINDA_SMALL_NUMBER)
+	{
+		const FVector NewDirection = Base / BaseSpeed;
+		if (FVector::DotProduct(NewDirection, SlideDirection) < 0.0)
+		{
+			BaseSpeed = 0.0;
+		}
+		else
+		{
+			SlideDirection = NewDirection.GetSafeNormal2D();
+		}
+	}
+	BaseSpeed = FMath::Clamp(BaseSpeed - SlideFriction * DeltaTime, 0.0, static_cast<double>(SlideMaxSpeed));
+	SlideBaseVelocity = SlideDirection * BaseSpeed;
+
+	// 4. Carried boost: held briefly, then fades.
+	if (GetWorldTime() - SlideStartTime > SlideMomentumHoldTime)
+	{
+		SlideBoostSpeed = FMath::Max(0.f, SlideBoostSpeed - SlideMomentumDecay * DeltaTime);
+	}
+
+	CurrentSlideSpeed = static_cast<float>(BaseSpeed) + SlideBoostSpeed;
 }
 
 void UMegaCharacterMovementComponent::BeginGroundSlideOrCrouch()
@@ -456,8 +501,12 @@ void UMegaCharacterMovementComponent::StartSlide()
 		Direction = !CarriedDirection.IsNearlyZero() ? CarriedDirection : GetFacingDirection2D();
 	}
 
+	// Base physics speed starts at the slide kick; anything carried above it is a fading boost.
+	const float EntrySpeed = FMath::Clamp(CarriedSpeed, SlideSpeed, FMath::Max(SlideSpeed, SlideMaxEntrySpeed));
 	SlideDirection = Direction;
-	CurrentSlideSpeed = FMath::Clamp(CarriedSpeed, SlideSpeed, FMath::Max(SlideSpeed, SlideMaxEntrySpeed));
+	SlideBaseVelocity = Direction * SlideSpeed;
+	SlideBoostSpeed = EntrySpeed - SlideSpeed;
+	CurrentSlideSpeed = EntrySpeed;
 	SlideStartTime = GetWorldTime();
 
 	if (bIsCrouchHeld)

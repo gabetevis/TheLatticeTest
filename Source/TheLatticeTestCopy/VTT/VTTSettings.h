@@ -105,9 +105,28 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="0"))
 	float LineLength = 140.f;
 
-	/** 0 = horizontal. Positive tilts the line upward, negative downward. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="-75", ClampMax="75", ForceUnits="deg"))
+	/**
+	 * Preferred direction of the line: 0 = right, 90 = up, 180 = left, -90 = down.
+	 * With Follow Open Space on, the line leaves this direction when there isn't room or the
+	 * object is near a screen edge, and glides back when there is.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="-180", ClampMax="180", ForceUnits="deg"))
 	float LineAngleDegrees = 0.f;
+
+	/** The line (and its text) moves around the box toward open screen space as the camera moves. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line")
+	bool bFollowOpenSpace = true;
+
+	/** How quickly the line glides around the box to its new direction. Higher = snappier. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="0.1", EditCondition="bFollowOpenSpace"))
+	float LineTurnSpeed = 5.f;
+
+	/**
+	 * How strongly the line points toward the screen center when its object is near an edge
+	 * (0 = only avoid running off screen, 1 = always swing toward the center).
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="0", ClampMax="1", EditCondition="bFollowOpenSpace"))
+	float PullTowardScreenCenter = 0.7f;
 
 	/** Gap between the end of the line and the text. */
 	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0"))
