@@ -110,24 +110,24 @@ public:
 	//~ Tuning: Dash ----------------------------------------------------------------------------
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashSpeed = 3000.f;
+	float DashSpeed = 5000.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0.01", ForceUnits="s"))
-	float DashDuration = 0.18f;
+	float DashDuration = 0.3f;
 
 	/** Horizontal speed kept when a dash ends naturally. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashExitSpeed = 1200.f;
+	float DashExitSpeed = 2500.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="1"))
-	int32 MaxDashCharges = 3;
+	int32 MaxDashCharges = 5;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0"))
-	float DashChargesRegenPerSecond = 0.9f;
+	float DashChargesRegenPerSecond = 0.8f;
 
 	/** Jumping during a grounded dash launches with this horizontal speed (the "dash jump"). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashJumpHorizontalSpeed = 2600.f;
+	float DashJumpHorizontalSpeed = 5000.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0"))
 	float DashJumpVerticalScale = 0.75f;
@@ -145,11 +145,11 @@ public:
 
 	/** Starting speed of a slide from a standstill or walk. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideSpeed = 1700.f;
+	float SlideSpeed = 2000.f;
 
 	/** Constant slowdown while sliding. With the default gravity, slopes steeper than ~12 degrees overcome it. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
-	float SlideFriction = 450.f;
+	float SlideFriction = 600.f;
 
 	/** How strongly slopes speed up / slow down a slide. 1 = real gravity (incl. GravityScale). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0"))
@@ -157,15 +157,15 @@ public:
 
 	/** Slides can't get faster than this from slopes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMaxSpeed = 5000.f;
+	float SlideMaxSpeed = 8000.f;
 
 	/** Below this speed the slide ends and becomes a crouch. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMinSpeed = 350.f;
+	float SlideMinSpeed = 450.f;
 
 	/** Cap on how much carried speed (dash, grapple, fall) a slide can start with. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMaxEntrySpeed = 3200.f;
+	float SlideMaxEntrySpeed = 8000.f;
 
 	/** Carried speed above SlideSpeed is held this long before it starts fading. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="s"))

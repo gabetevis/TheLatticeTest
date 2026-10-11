@@ -494,7 +494,7 @@ void UMegaCharacterMovementComponent::StartSlide()
 	const FVector CarriedDirection = GetCarriedDirection2D();
 	const bool bCarryingMomentum = CarriedSpeed > SlideSpeed && !CarriedDirection.IsNearlyZero();
 
-	// With momentum, slide where we were already going; otherwise input, then facing.
+	// With momentum, slide where you were already going; otherwise input, then facing.
 	FVector Direction = bCarryingMomentum ? CarriedDirection : GetMoveInputDirection2D();
 	if (Direction.IsNearlyZero())
 	{

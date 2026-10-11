@@ -17,7 +17,7 @@ class UInputMappingContext;
  *   Look   Mouse                | Right stick
  *   Jump   Space                | A / Cross
  *   Dash   Left Shift           | Left bumper
- *   Slide  Left Ctrl            | B / Circle     (moving: slide, still: crouch, air: slam)
+ *   Slide  Left ALT             | B / Circle     (moving: slide, still: crouch, air: slam)
  *   Grapple F                   | RB / R1
  */
 struct FMegaDefaultInput
