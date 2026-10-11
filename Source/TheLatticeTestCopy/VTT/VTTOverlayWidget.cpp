@@ -20,8 +20,13 @@ namespace VTTDraw
 		return Color;
 	}
 
+	static float EaseOutCubic(float T)
+	{
+		return 1.f - FMath::Pow(1.f - FMath::Clamp(T, 0.f, 1.f), 3.f);
+	}
+
 	static void WrapText(const FString& Source, const FSlateFontInfo& Font, float MaxWidth,
-		const TSharedRef<FSlateFontMeasure>& Measure, TArray<FString>& OutLines)
+		const TSharedRef<FSlateFontMeasure>& Measure, TArray<FString>& OutLines, TArray<float>& OutWidths)
 	{
 		const FString Clean = Source.Replace(TEXT("\r"), TEXT(""));
 		if (Clean.IsEmpty())
@@ -32,13 +37,19 @@ namespace VTTDraw
 		TArray<FString> Paragraphs;
 		Clean.ParseIntoArray(Paragraphs, TEXT("\n"), /*bCullEmpty*/ false);
 
+		auto Commit = [&](const FString& Line)
+		{
+			OutLines.Add(Line);
+			OutWidths.Add(static_cast<float>(Measure->Measure(Line, Font).X));
+		};
+
 		for (const FString& Paragraph : Paragraphs)
 		{
 			TArray<FString> Words;
 			Paragraph.ParseIntoArrayWS(Words);
 			if (Words.Num() == 0)
 			{
-				OutLines.Add(FString());
+				Commit(FString());
 				continue;
 			}
 
@@ -48,7 +59,7 @@ namespace VTTDraw
 				const FString Candidate = Line.IsEmpty() ? Word : Line + TEXT(" ") + Word;
 				if (!Line.IsEmpty() && Measure->Measure(Candidate, Font).X > MaxWidth)
 				{
-					OutLines.Add(Line);
+					Commit(Line);
 					Line = Word;
 				}
 				else
@@ -56,24 +67,8 @@ namespace VTTDraw
 					Line = Candidate;
 				}
 			}
-			OutLines.Add(Line);
+			Commit(Line);
 		}
-	}
-
-	static FString Scramble(const FString& Source)
-	{
-		static const TCHAR Glyphs[] = TEXT("#%&*+=<>/\\[]{}?!0123456789ABCDEFXZ");
-		constexpr int32 NumGlyphs = UE_ARRAY_COUNT(Glyphs) - 1;
-
-		FString Result = Source;
-		for (int32 i = 0; i < Result.Len(); ++i)
-		{
-			if (!FChar::IsWhitespace(Result[i]))
-			{
-				Result[i] = Glyphs[FMath::RandRange(0, NumGlyphs - 1)];
-			}
-		}
-		return Result;
 	}
 }
 
@@ -96,17 +91,21 @@ void UVTTOverlayWidget::RefreshFonts()
 
 	if (const UFont* Font = Settings->Font.LoadSynchronous())
 	{
-		LabelFont = FSlateFontInfo(Font, static_cast<float>(Settings->LabelFontSize));
-		BodyFont = FSlateFontInfo(Font, static_cast<float>(Settings->BodyFontSize));
+		LabelFont = FSlateFontInfo(Font, static_cast<float>(Settings->LabelFontSize), Settings->Typeface);
+		BodyFont = FSlateFontInfo(Font, static_cast<float>(Settings->FontSize), Settings->Typeface);
 	}
 	else
 	{
-		LabelFont = FCoreStyle::GetDefaultFontStyle("Bold", Settings->LabelFontSize);
-		BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", Settings->BodyFontSize);
+		LabelFont = FCoreStyle::GetDefaultFontStyle(Settings->Typeface, Settings->LabelFontSize);
+		BodyFont = FCoreStyle::GetDefaultFontStyle(Settings->Typeface, Settings->FontSize);
 	}
 
-	LabelFont.LetterSpacing = Settings->LetterSpacing;
-	BodyFont.LetterSpacing = Settings->LetterSpacing;
+	for (FSlateFontInfo* FontInfo : { &LabelFont, &BodyFont })
+	{
+		FontInfo->LetterSpacing = Settings->LetterSpacing;
+		FontInfo->OutlineSettings.OutlineSize = Settings->TextOutlineSize;
+		FontInfo->OutlineSettings.OutlineColor = Settings->TextOutlineColor;
+	}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -131,7 +130,7 @@ void UVTTOverlayWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	const TArray<FVTTActiveCallout>& Callouts = Subsystem->GetActiveCallouts();
 
 	// Forget layouts of callouts that are gone.
-	for (auto It = TextLayouts.CreateIterator(); It; ++It)
+	for (auto It = Layouts.CreateIterator(); It; ++It)
 	{
 		const int32 Id = It.Key();
 		if (!Callouts.ContainsByPredicate([Id](const FVTTActiveCallout& Callout) { return Callout.Id == Id; }))
@@ -140,9 +139,9 @@ void UVTTOverlayWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 		}
 	}
 
-	for (int32 Index = 0; Index < Callouts.Num(); ++Index)
+	for (const FVTTActiveCallout& Callout : Callouts)
 	{
-		BuildCallout(Callouts[Index], Index, MyGeometry, Controller);
+		BuildCallout(Callout, MyGeometry.GetLocalSize(), Controller);
 	}
 }
 
@@ -171,9 +170,9 @@ bool UVTTOverlayWidget::ProjectBounds(const FBox& WorldBounds, APlayerController
 	return NumProjected >= 2 && OutRect.bIsValid;
 }
 
-UVTTOverlayWidget::FCalloutTextLayout& UVTTOverlayWidget::GetOrBuildTextLayout(const FVTTActiveCallout& Callout)
+UVTTOverlayWidget::FCalloutLayout& UVTTOverlayWidget::GetOrBuildLayout(const FVTTActiveCallout& Callout)
 {
-	if (FCalloutTextLayout* Existing = TextLayouts.Find(Callout.Id))
+	if (FCalloutLayout* Existing = Layouts.Find(Callout.Id))
 	{
 		return *Existing;
 	}
@@ -181,29 +180,23 @@ UVTTOverlayWidget::FCalloutTextLayout& UVTTOverlayWidget::GetOrBuildTextLayout(c
 	const UVTTSettings* Settings = UVTTSettings::Get();
 	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
 
-	FCalloutTextLayout& Layout = TextLayouts.Add(Callout.Id);
-	VTTDraw::WrapText(Callout.Label.ToString(), LabelFont, Settings->TextMaxWidth, Measure, Layout.LabelLines);
-	VTTDraw::WrapText(Callout.Body.ToString(), BodyFont, Settings->TextMaxWidth, Measure, Layout.BodyLines);
+	FCalloutLayout& Layout = Layouts.Add(Callout.Id);
+	VTTDraw::WrapText(Callout.Label.ToString(), LabelFont, Settings->TextMaxWidth, Measure, Layout.LabelLines, Layout.LabelLineWidths);
+	VTTDraw::WrapText(Callout.Body.ToString(), BodyFont, Settings->TextMaxWidth, Measure, Layout.BodyLines, Layout.BodyLineWidths);
 	Layout.LabelLineHeight = Measure->GetMaxCharacterHeight(LabelFont);
 	Layout.BodyLineHeight = Measure->GetMaxCharacterHeight(BodyFont);
 
-	for (const FString& Line : Layout.LabelLines)
-	{
-		Layout.BlockWidth = FMath::Max(Layout.BlockWidth, static_cast<float>(Measure->Measure(Line, LabelFont).X));
-	}
-	for (const FString& Line : Layout.BodyLines)
-	{
-		Layout.BlockWidth = FMath::Max(Layout.BlockWidth, static_cast<float>(Measure->Measure(Line, BodyFont).X));
-	}
+	for (const float Width : Layout.LabelLineWidths) { Layout.BlockWidth = FMath::Max(Layout.BlockWidth, Width); }
+	for (const float Width : Layout.BodyLineWidths) { Layout.BlockWidth = FMath::Max(Layout.BlockWidth, Width); }
+	Layout.BlockHeight = Layout.LabelLines.Num() * Layout.LabelLineHeight + Layout.BodyLines.Num() * Layout.BodyLineHeight;
 	return Layout;
 }
 
-void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, int32 StackIndex, const FGeometry& Geometry, APlayerController* Controller)
+void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, const FVector2D& ViewSize, APlayerController* Controller)
 {
 	using namespace VTTDraw;
 
 	const UVTTSettings* Settings = UVTTSettings::Get();
-	const FVector2D ViewSize = Geometry.GetLocalSize();
 
 	FBox2D TargetRect;
 	if (!ProjectBounds(Callout.LastWorldBounds, Controller, TargetRect))
@@ -223,224 +216,105 @@ void UVTTOverlayWidget::BuildCallout(const FVTTActiveCallout& Callout, int32 Sta
 	Center = Rect.GetCenter();
 	HalfSize = Rect.GetExtent();
 
-	// --- Animation state ---
+	// --- Timing ---
 	const float Age = Callout.Age;
 	const float BoxIn = Settings->BoxIntroDuration;
 	const float LineIn = Settings->LineIntroDuration;
 	const float TypeStart = BoxIn + LineIn;
+	const float BoxT = BoxIn > 0.f ? Age / BoxIn : 1.f;
+	const float LineT = LineIn > 0.f ? (Age - BoxIn) / LineIn : (Age >= BoxIn ? 1.f : 0.f);
+	const float Alpha = Callout.bDismissing
+		? 1.f - FMath::Clamp((Age - Callout.DismissStartAge) / Settings->OutroDuration, 0.f, 1.f)
+		: 1.f;
+	const FLinearColor Color = WithAlpha(Callout.Color, Alpha);
 
-	const float BoxT = BoxIn > 0.f ? FMath::Clamp(Age / BoxIn, 0.f, 1.f) : 1.f;
-	const float LineT = LineIn > 0.f ? FMath::Clamp((Age - BoxIn) / LineIn, 0.f, 1.f) : (Age >= BoxIn ? 1.f : 0.f);
-
-	float Alpha = 1.f;
-	bool bGlitching = BoxT < 1.f;
-	if (Callout.bDismissing)
-	{
-		Alpha = 1.f - FMath::Clamp((Age - Callout.DismissStartAge) / Settings->OutroDuration, 0.f, 1.f);
-		bGlitching = true;
-	}
-
-	FVector2D Jitter = FVector2D::ZeroVector;
-	if (Settings->bGlitchEffects && bGlitching)
-	{
-		if (FMath::FRand() < 0.3f)
-		{
-			Alpha *= 0.3f;
-		}
-		Jitter = FVector2D(FMath::FRandRange(-2.f, 2.f), FMath::FRandRange(-1.f, 1.f));
-	}
-
-	// --- Frame: grows out from the center ---
-	const float BoxEase = 1.f - FMath::Pow(1.f - BoxT, 3.f);
-	AddFrame(FBox2D(Center - HalfSize * BoxEase + Jitter, Center + HalfSize * BoxEase + Jitter), Alpha);
-
+	// --- Box: grows out from the center ---
+	const double BoxScale = Callout.bDismissing ? 1.0 : EaseOutCubic(BoxT);
+	AddBox(FBox2D(Center - HalfSize * BoxScale, Center + HalfSize * BoxScale), Color, Settings->BoxThickness);
 	if (Age < BoxIn && !Callout.bDismissing)
 	{
 		return;
 	}
 
-	// --- Text placement ---
-	FCalloutTextLayout& Layout = GetOrBuildTextLayout(Callout);
-	if (Layout.SideX == 0)
+	// --- Side: toward the emptier half of the screen, unless the text wouldn't fit there ---
+	FCalloutLayout& Layout = GetOrBuildLayout(Callout);
+	const float AngleRad = FMath::DegreesToRadians(Settings->LineAngleDegrees);
+	const double Reach = Settings->LineLength * FMath::Cos(AngleRad) + Settings->TextGap + Layout.BlockWidth;
+	if (Layout.Side == 0)
 	{
-		Layout.SideX = Center.X < ViewSize.X * 0.5f ? 1 : -1;  // text toward the emptier half
-		Layout.SideY = Center.Y > ViewSize.Y * 0.4f ? -1 : 1;
+		Layout.Side = Center.X < ViewSize.X * 0.5 ? 1 : -1;
+		const bool bFitsRight = Rect.Max.X + Reach <= ViewSize.X;
+		const bool bFitsLeft = Rect.Min.X - Reach >= 0.0;
+		if (Layout.Side > 0 && !bFitsRight && bFitsLeft) { Layout.Side = -1; }
+		if (Layout.Side < 0 && !bFitsLeft && bFitsRight) { Layout.Side = 1; }
 	}
-	const float SideX = static_cast<float>(Layout.SideX);
-	const float SideY = static_cast<float>(Layout.SideY);
+	const double Side = static_cast<double>(Layout.Side);
 
-	const FVector2D Anchor(
-		(Layout.SideX > 0 ? Rect.Max.X : Rect.Min.X) + Jitter.X,
-		(Layout.SideY < 0 ? Rect.Min.Y : Rect.Max.Y) + Jitter.Y);
-
-	const float Diagonal = Settings->LeaderLength * UE_INV_SQRT_2;
-	FVector2D Elbow = Anchor + FVector2D(SideX * Diagonal, SideY * (Diagonal + StackIndex * 22.f));
-
-	const float LabelHeight = Layout.LabelLines.Num() * Layout.LabelLineHeight;
-	const float BodyHeight = Layout.BodyLines.Num() * Layout.BodyLineHeight;
-	const float Pad = Settings->TextBackdropPadding;
-
-	float TextX = Layout.SideX > 0 ? Elbow.X + Settings->ShelfLength : Elbow.X - Settings->ShelfLength - Layout.BlockWidth;
-
-	// Keep the text block on screen by sliding elbow + text together (the anchor stays put).
-	{
-		const float MinX = TextX - Pad;
-		const float MaxX = TextX + Layout.BlockWidth + Pad;
-		const float MinY = Elbow.Y - Settings->TextGap - LabelHeight - Pad;
-		const float MaxY = Elbow.Y + Settings->TextGap + BodyHeight + Pad;
-		constexpr float ScreenMargin = 8.f;
-
-		FVector2D Shift = FVector2D::ZeroVector;
-		if (MinX < ScreenMargin) { Shift.X = ScreenMargin - MinX; }
-		else if (MaxX > ViewSize.X - ScreenMargin) { Shift.X = ViewSize.X - ScreenMargin - MaxX; }
-		if (MinY < ScreenMargin) { Shift.Y = ScreenMargin - MinY; }
-		else if (MaxY > ViewSize.Y - ScreenMargin) { Shift.Y = ViewSize.Y - ScreenMargin - MaxY; }
-
-		Elbow += Shift;
-		TextX += Shift.X;
-	}
-
-	const float LabelTop = Elbow.Y - Settings->TextGap - LabelHeight;
-	const float BodyTop = Elbow.Y + Settings->TextGap;
-	// The shelf continues under the label, so the line doubles as its underline.
-	const FVector2D ShelfEnd(Layout.SideX > 0 ? TextX + Layout.BlockWidth : TextX, Elbow.Y);
-
-	// --- Leader line: drawn progressively during the line intro ---
-	{
-		const float FirstLength = FVector2D::Distance(Anchor, Elbow);
-		const float SecondLength = FVector2D::Distance(Elbow, ShelfEnd);
-		float Remaining = (FirstLength + SecondLength) * LineT;
-
-		TArray<FVector2D> Points;
-		Points.Add(Anchor);
-		if (Remaining <= FirstLength)
-		{
-			Points.Add(FMath::Lerp(Anchor, Elbow, FirstLength > 0.f ? Remaining / FirstLength : 1.f));
-		}
-		else
-		{
-			Remaining -= FirstLength;
-			Points.Add(Elbow);
-			Points.Add(FMath::Lerp(Elbow, ShelfEnd, SecondLength > 0.f ? Remaining / SecondLength : 1.f));
-		}
-		AddPolyline(MoveTemp(Points), WithAlpha(Settings->FrameColor, Alpha), Settings->LineThickness);
-
-		// Small square marking where the line leaves the frame.
-		RectDraws.Add(FRectDraw{ Anchor - FVector2D(2.f), FVector2D(4.f), WithAlpha(Settings->FrameColor, Alpha) });
-	}
+	// --- Line: straight off the middle of the box's side ---
+	const FVector2D LineStart(Layout.Side > 0 ? Rect.Max.X : Rect.Min.X, Center.Y);
+	const FVector2D LineDirection(Side * FMath::Cos(AngleRad), -FMath::Sin(AngleRad));
+	const FVector2D LineEnd = LineStart + LineDirection * Settings->LineLength;
+	const FVector2D DrawnEnd = Callout.bDismissing ? LineEnd : FMath::Lerp(LineStart, LineEnd, FMath::Clamp(LineT, 0.f, 1.f));
+	LineDraws.Add(FLineDraw{ LineStart, DrawnEnd, Color, Settings->LineThickness });
 
 	if (Age < TypeStart && !Callout.bDismissing)
 	{
 		return;
 	}
 
-	// --- Backdrop + typed text ---
-	if (Settings->TextBackdropColor.A > 0.f)
-	{
-		const FVector2D BackdropPos(TextX - Pad, LabelTop - Pad);
-		const FVector2D BackdropSize(Layout.BlockWidth + 2.f * Pad, (BodyTop + BodyHeight) - LabelTop + 2.f * Pad);
-		RectDraws.Insert(FRectDraw{ BackdropPos, BackdropSize, WithAlpha(Settings->TextBackdropColor, Alpha) }, 0);
-	}
+	// --- Text: vertically centered on the line end, kept on screen ---
+	constexpr double ScreenMargin = 8.0;
+	double Left = Layout.Side > 0 ? LineEnd.X + Settings->TextGap : LineEnd.X - Settings->TextGap - Layout.BlockWidth;
+	double Top = LineEnd.Y - Layout.BlockHeight * 0.5;
+	Left = FMath::Clamp(Left, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.X - ScreenMargin - Layout.BlockWidth));
+	Top = FMath::Clamp(Top, ScreenMargin, FMath::Max(ScreenMargin, ViewSize.Y - ScreenMargin - Layout.BlockHeight));
 
-	const bool bFullyRevealed = Callout.bDismissing;
-	int32 CharBudget = FMath::FloorToInt((Age - TypeStart) * Settings->CharactersPerSecond);
-	AddTextLines(Layout.LabelLines, FVector2D(TextX, LabelTop), Layout.LabelLineHeight, true, Settings->LabelColor, Alpha, CharBudget, bFullyRevealed);
-	AddTextLines(Layout.BodyLines, FVector2D(TextX, BodyTop), Layout.BodyLineHeight, false, Settings->BodyColor, Alpha, CharBudget, bFullyRevealed);
+	int32 CharBudget = (Settings->bTypewriter && !Callout.bDismissing)
+		? FMath::FloorToInt((Age - TypeStart) * Settings->CharactersPerSecond)
+		: MAX_int32;
+
+	const bool bAlignRight = Layout.Side < 0; // text hugs the line end on either side
+	AddTextLines(Layout.LabelLines, Layout.LabelLineWidths, Layout.LabelLineHeight, /*bLabel*/ true,
+		static_cast<float>(Left), static_cast<float>(Top), Layout.BlockWidth, bAlignRight, Color, CharBudget);
+	AddTextLines(Layout.BodyLines, Layout.BodyLineWidths, Layout.BodyLineHeight, /*bLabel*/ false,
+		static_cast<float>(Left), static_cast<float>(Top + Layout.LabelLines.Num() * Layout.LabelLineHeight),
+		Layout.BlockWidth, bAlignRight, Color, CharBudget);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Draw-list helpers
 // ---------------------------------------------------------------------------------------------
 
-void UVTTOverlayWidget::AddPolyline(TArray<FVector2D> Points, const FLinearColor& Color, float Thickness)
+void UVTTOverlayWidget::AddBox(const FBox2D& Rect, const FLinearColor& Color, float Thickness)
 {
-	if (Points.Num() < 2)
-	{
-		return;
-	}
+	const double T = Thickness;
+	const double HalfT = T * 0.5;
+	const FVector2D Min = Rect.Min - FVector2D(HalfT);
+	const FVector2D Max = Rect.Max + FVector2D(HalfT);
+	const FVector2D Size = Max - Min;
 
-	FLineDraw& Line = LineDraws.AddDefaulted_GetRef();
-	Line.Points.Reserve(Points.Num());
-	for (const FVector2D& Point : Points)
-	{
-		Line.Points.Add(FVector2f(Point));
-	}
-	Line.Color = Color;
-	Line.Thickness = Thickness;
+	RectDraws.Add(FRectDraw{ Min, FVector2D(Size.X, T), Color });                                 // top
+	RectDraws.Add(FRectDraw{ FVector2D(Min.X, Max.Y - T), FVector2D(Size.X, T), Color });          // bottom
+	RectDraws.Add(FRectDraw{ FVector2D(Min.X, Min.Y + T), FVector2D(T, Size.Y - 2.0 * T), Color }); // left
+	RectDraws.Add(FRectDraw{ FVector2D(Max.X - T, Min.Y + T), FVector2D(T, Size.Y - 2.0 * T), Color }); // right
 }
 
-void UVTTOverlayWidget::AddFrame(const FBox2D& Rect, float Alpha)
+void UVTTOverlayWidget::AddTextLines(const TArray<FString>& Lines, const TArray<float>& Widths, float LineHeight, bool bLabel,
+	float Left, float Top, float BlockWidth, bool bAlignRight, const FLinearColor& Color, int32& InOutCharBudget)
 {
-	using namespace VTTDraw;
-
-	const UVTTSettings* Settings = UVTTSettings::Get();
-	const FVector2D Min = Rect.Min;
-	const FVector2D Max = Rect.Max;
-
-	// Faint full outline.
-	if (Settings->FrameOutlineOpacity > 0.f)
+	for (int32 LineIndex = 0; LineIndex < Lines.Num() && InOutCharBudget > 0; ++LineIndex)
 	{
-		AddPolyline({ Min, FVector2D(Max.X, Min.Y), Max, FVector2D(Min.X, Max.Y), Min },
-			WithAlpha(Settings->FrameColor, Alpha * Settings->FrameOutlineOpacity), 1.f);
-	}
-
-	// Solid corner brackets.
-	const FVector2D Size = Rect.GetSize();
-	// FVector2D is double precision in UE5, so cast before mixing with float settings.
-	const float Corner = FMath::Min3(Settings->CornerLength, static_cast<float>(Size.X) * 0.5f, static_cast<float>(Size.Y) * 0.5f);
-	const FLinearColor Color = WithAlpha(Settings->FrameColor, Alpha);
-	const float Thickness = Settings->FrameThickness;
-
-	AddPolyline({ FVector2D(Min.X, Min.Y + Corner), Min, FVector2D(Min.X + Corner, Min.Y) }, Color, Thickness);
-	AddPolyline({ FVector2D(Max.X - Corner, Min.Y), FVector2D(Max.X, Min.Y), FVector2D(Max.X, Min.Y + Corner) }, Color, Thickness);
-	AddPolyline({ FVector2D(Max.X, Max.Y - Corner), Max, FVector2D(Max.X - Corner, Max.Y) }, Color, Thickness);
-	AddPolyline({ FVector2D(Min.X + Corner, Max.Y), FVector2D(Min.X, Max.Y), FVector2D(Min.X, Max.Y - Corner) }, Color, Thickness);
-}
-
-void UVTTOverlayWidget::AddTextLines(const TArray<FString>& Lines, const FVector2D& TopLeft, float LineHeight, bool bLabelFont,
-	const FLinearColor& Color, float Alpha, int32& InOutCharBudget, bool bFullyRevealed)
-{
-	using namespace VTTDraw;
-
-	const UVTTSettings* Settings = UVTTSettings::Get();
-	const FSlateFontInfo& Font = bLabelFont ? LabelFont : BodyFont;
-	const FVector2D DrawSize(Settings->TextMaxWidth * 1.5f, LineHeight);
-
-	for (int32 LineIndex = 0; LineIndex < Lines.Num(); ++LineIndex)
-	{
-		if (!bFullyRevealed && InOutCharBudget < 0)
-		{
-			return; // typing cursor is above this line
-		}
-
 		const FString& Line = Lines[LineIndex];
-		const FVector2D Position(TopLeft.X, TopLeft.Y + LineIndex * LineHeight);
+		const float X = bAlignRight ? Left + BlockWidth - Widths[LineIndex] : Left;
+		const FVector2D Position(X, Top + LineIndex * LineHeight);
 
-		if (bFullyRevealed || InOutCharBudget >= Line.Len())
+		// Typewriter: reveal from the left. Right-aligned lines keep their final position.
+		const FString Visible = InOutCharBudget >= Line.Len() ? Line : Line.Left(InOutCharBudget);
+		if (!Visible.IsEmpty())
 		{
-			TextDraws.Add(FTextDraw{ Position, DrawSize, Line, bLabelFont, WithAlpha(Color, Alpha) });
-			InOutCharBudget -= Line.Len();
-			continue;
+			TextDraws.Add(FTextDraw{ Position, Visible, bLabel, Color });
 		}
-
-		// Partially typed: revealed text, then a run of scrambled glyphs ahead of the cursor.
-		const FString Revealed = Line.Left(InOutCharBudget);
-		const int32 NumScrambled = FMath::Min(Settings->ScrambleLeadCharacters, Line.Len() - InOutCharBudget);
-
-		if (!Revealed.IsEmpty())
-		{
-			TextDraws.Add(FTextDraw{ Position, DrawSize, Revealed, bLabelFont, WithAlpha(Color, Alpha) });
-		}
-		if (NumScrambled > 0)
-		{
-			const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
-			const float Offset = Revealed.IsEmpty() ? 0.f : static_cast<float>(Measure->Measure(Revealed, Font).X);
-			TextDraws.Add(FTextDraw{ Position + FVector2D(Offset, 0.f), DrawSize, Scramble(Line.Mid(InOutCharBudget, NumScrambled)),
-				bLabelFont, WithAlpha(Settings->ScrambleColor, Alpha) });
-		}
-
-		InOutCharBudget = -1; // everything after the cursor stays hidden
-		return;
+		InOutCharBudget = InOutCharBudget == MAX_int32 ? MAX_int32 : InOutCharBudget - Line.Len();
 	}
 }
 
@@ -461,19 +335,23 @@ int32 UVTTOverlayWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Al
 			&WhiteBrush, ESlateDrawEffect::None, Rect.Color);
 	}
 
-	++Layer;
 	for (const FLineDraw& Line : LineDraws)
 	{
+		TArray<FVector2f> Points;
+		Points.Add(FVector2f(Line.Start));
+		Points.Add(FVector2f(Line.End));
 		FSlateDrawElement::MakeLines(OutDrawElements, Layer, AllottedGeometry.ToPaintGeometry(),
-			Line.Points, ESlateDrawEffect::None, Line.Color, /*bAntialias*/ true, Line.Thickness);
+			MoveTemp(Points), ESlateDrawEffect::None, Line.Color, /*bAntialias*/ true, Line.Thickness);
 	}
 
 	++Layer;
+	const UVTTSettings* Settings = UVTTSettings::Get();
+	const FVector2f TextDrawSize(Settings->TextMaxWidth * 2.f, static_cast<float>(Settings->FontSize) * 3.f);
 	for (const FTextDraw& Text : TextDraws)
 	{
 		FSlateDrawElement::MakeText(OutDrawElements, Layer,
-			AllottedGeometry.ToPaintGeometry(FVector2f(Text.Size), FSlateLayoutTransform(FVector2f(Text.Position))),
-			Text.Text, Text.bLabelFont ? LabelFont : BodyFont, ESlateDrawEffect::None, Text.Color);
+			AllottedGeometry.ToPaintGeometry(TextDrawSize, FSlateLayoutTransform(FVector2f(Text.Position))),
+			Text.Text, Text.bLabel ? LabelFont : BodyFont, ESlateDrawEffect::None, Text.Color);
 	}
 
 	return Layer;

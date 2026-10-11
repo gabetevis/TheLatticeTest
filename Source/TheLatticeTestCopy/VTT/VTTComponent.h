@@ -33,7 +33,7 @@ class THELATTICETESTCOPY_API UVTTComponent : public UBoxComponent
 public:
 	UVTTComponent();
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VTT", meta=(TitleProperty="Label"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VTT", meta=(TitleProperty="Body"))
 	TArray<FVTTEntry> Entries;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VTT")
@@ -41,6 +41,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VTT")
 	EVTTBoundsMode BoundsMode = EVTTBoundsMode::OwnerBounds;
+
+	/** Use Color instead of the project-wide VTT color (Project Settings > Game > VTT). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VTT", meta=(InlineEditConditionToggle))
+	bool bOverrideColor = false;
+
+	/** Color for this object's callouts, e.g. red for enemies. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VTT", meta=(EditCondition="bOverrideColor"))
+	FLinearColor Color = FLinearColor::White;
 
 	/** Max distance from the camera for this object to be readable. 0 = project default. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VTT|Visibility", meta=(ClampMin="0", ForceUnits="cm"))
@@ -69,6 +77,13 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="VTT")
 	void SetVTTEnabled(bool bEnabled);
+
+	/** Overrides this object's callout color. Applies to callouts shown after the call. */
+	UFUNCTION(BlueprintCallable, Category="VTT")
+	void SetVTTColor(FLinearColor NewColor);
+
+	/** The color this object's callouts use (override or project default). */
+	FLinearColor GetEffectiveColor() const;
 
 	/** World-space box the VTT frame is drawn around. Invalid box if nothing to frame. */
 	FBox GetVTTWorldBounds() const;

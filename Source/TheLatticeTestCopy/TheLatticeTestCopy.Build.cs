@@ -25,7 +25,8 @@ public class TheLatticeTestCopy : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"Slate",               // VTT overlay drawing
-			"SlateCore"
+			"SlateCore",
+			"CableComponent"       // grapple rope
 		});
 	}
 }

@@ -16,10 +16,10 @@ UMegaCharacterMovementComponent::UMegaCharacterMovementComponent()
 	GravityScale = 2.2f;
 	JumpZVelocity = 950.f;
 	AirControl = 0.65f;
-	BrakingDecelerationFalling = 0.f; // keep air momentum (slide jumps, dash jumps)
+	BrakingDecelerationFalling = 0.f; // keep air momentum (slide jumps, dash jumps, grapple)
 	FallingLateralFriction = 0.f;
 
-	// Sliding uses the engine crouch to shrink the capsule.
+	// Crouch and slide both use the engine crouch to shrink the capsule.
 	GetNavAgentPropertiesRef().bCanCrouch = true;
 	SetCrouchedHalfHeight(48.f);
 	bCanWalkOffLedgesWhenCrouching = true;
@@ -62,14 +62,26 @@ void UMegaCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick 
 			DashStamina = FMath::Min(static_cast<float>(MaxDashCharges), DashStamina + DashChargesRegenPerSecond * DeltaTime);
 		}
 
-		// Slide: ends when leaving the ground, (re)starts whenever held on the ground.
+		// Slide / crouch end when leaving the ground.
 		if (bIsSliding && !IsMovingOnGround())
 		{
 			EndSlide();
 		}
-		else if (bSlideInputHeld && !bIsSliding && !bIsDashing && IsMovingOnGround())
+		if (bIsCrouchHeld && !IsMovingOnGround())
 		{
-			StartSlide();
+			EndCrouchHold();
+		}
+
+		// Button held on the ground but not yet sliding/crouching (landing, or a dash just ended).
+		if (bSlideInputHeld && IsMovingOnGround() && !bIsSliding && !bIsCrouchHeld && !bIsDashing && !bIsGrappling)
+		{
+			BeginGroundSlideOrCrouch();
+		}
+
+		// Slide speed: hold carried momentum briefly, then bleed back down to SlideSpeed.
+		if (bIsSliding && CurrentSlideSpeed > SlideSpeed && GetWorldTime() - SlideStartTime > SlideMomentumHoldTime)
+		{
+			CurrentSlideSpeed = FMath::Max(SlideSpeed, CurrentSlideSpeed - SlideMomentumDecay * DeltaTime);
 		}
 
 		// Slam: straight down, no horizontal drift.
@@ -87,6 +99,11 @@ void UMegaCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick 
 			}
 		}
 
+		if (bIsGrappling)
+		{
+			UpdateGrapple(DeltaTime);
+		}
+
 		ApplyWallSlide();
 	}
 
@@ -96,6 +113,40 @@ void UMegaCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick 
 	{
 		LastGroundedTime = GetWorldTime();
 	}
+	UpdateMomentumMemory();
+}
+
+void UMegaCharacterMovementComponent::UpdateMomentumMemory()
+{
+	// Keep the fastest horizontal speed of the last MomentumGraceTime seconds.
+	const float Now = GetWorldTime();
+	const float Speed2D = static_cast<float>(Velocity.Size2D());
+	if (Speed2D >= MomentumSpeed || Now - MomentumTime > MomentumGraceTime)
+	{
+		MomentumSpeed = Speed2D;
+		MomentumTime = Now;
+		if (Speed2D > KINDA_SMALL_NUMBER)
+		{
+			MomentumDirection = Velocity.GetSafeNormal2D();
+		}
+	}
+}
+
+float UMegaCharacterMovementComponent::GetCarriedSpeed2D() const
+{
+	const float Current = static_cast<float>(Velocity.Size2D());
+	const bool bMemoryFresh = GetWorldTime() - MomentumTime <= MomentumGraceTime;
+	return bMemoryFresh ? FMath::Max(Current, MomentumSpeed) : Current;
+}
+
+FVector UMegaCharacterMovementComponent::GetCarriedDirection2D() const
+{
+	const bool bMemoryFresh = GetWorldTime() - MomentumTime <= MomentumGraceTime;
+	if (bMemoryFresh && MomentumSpeed > Velocity.Size2D())
+	{
+		return MomentumDirection;
+	}
+	return Velocity.Size2D() > 100.0 ? Velocity.GetSafeNormal2D() : FVector::ZeroVector;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -109,6 +160,12 @@ void UMegaCharacterMovementComponent::CalcVelocity(float DeltaTime, float Fricti
 		// Constant horizontal velocity. In the air, PhysFalling re-adds the old Z (which we zeroed
 		// when the dash started) and gravity is 0 while dashing, so the dash stays flat.
 		Velocity = DashDirection * DashSpeed;
+		return;
+	}
+
+	if (bIsGrappling)
+	{
+		// Velocity is driven entirely by UpdateGrapple; don't let friction or air control fight it.
 		return;
 	}
 
@@ -129,7 +186,7 @@ void UMegaCharacterMovementComponent::CalcVelocity(float DeltaTime, float Fricti
 			}
 		}
 
-		Velocity = SlideDirection * SlideSpeed;
+		Velocity = SlideDirection * CurrentSlideSpeed;
 		return;
 	}
 
@@ -138,7 +195,7 @@ void UMegaCharacterMovementComponent::CalcVelocity(float DeltaTime, float Fricti
 
 float UMegaCharacterMovementComponent::GetGravityZ() const
 {
-	return bIsDashing ? 0.f : Super::GetGravityZ();
+	return (bIsDashing || bIsGrappling) ? 0.f : Super::GetGravityZ();
 }
 
 void UMegaCharacterMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
@@ -148,6 +205,21 @@ void UMegaCharacterMovementComponent::OnMovementModeChanged(EMovementMode Previo
 	if (MovementMode == MOVE_Walking && PreviousMovementMode == MOVE_Falling)
 	{
 		HandleLanded();
+	}
+}
+
+void UMegaCharacterMovementComponent::HandleImpact(const FHitResult& Hit, float TimeSlice, const FVector& MoveDelta)
+{
+	Super::HandleImpact(Hit, TimeSlice, MoveDelta);
+
+	// Slamming into something head-on while grappling releases the rope (as the old Blueprint did).
+	if (bIsGrappling && Hit.bBlockingHit)
+	{
+		const FVector PullDirection = (GetGrapplePoint() - UpdatedComponent->GetComponentLocation()).GetSafeNormal();
+		if (FVector::DotProduct(Hit.ImpactNormal, -PullDirection) > 0.5)
+		{
+			StopGrapple();
+		}
 	}
 }
 
@@ -163,6 +235,13 @@ bool UMegaCharacterMovementComponent::TryJump()
 	}
 
 	const float Now = GetWorldTime();
+
+	if (bIsGrappling)
+	{
+		StopGrapple();
+		LaunchJump(Velocity + FVector(0.f, 0.f, JumpZVelocity * GrappleJumpVerticalScale), EMegaJumpType::Grapple);
+		return true;
+	}
 
 	if (IsMovingOnGround())
 	{
@@ -187,7 +266,8 @@ bool UMegaCharacterMovementComponent::TryJump()
 
 		if (bIsSliding)
 		{
-			LaunchJump(SlideDirection * SlideSpeed + FVector(0.f, 0.f, JumpZVelocity * SlideJumpVerticalScale), EMegaJumpType::Slide);
+			// Uses the current (possibly boosted) slide speed, so momentum carries into the air.
+			LaunchJump(SlideDirection * CurrentSlideSpeed + FVector(0.f, 0.f, JumpZVelocity * SlideJumpVerticalScale), EMegaJumpType::Slide);
 			return true;
 		}
 
@@ -233,6 +313,10 @@ void UMegaCharacterMovementComponent::LaunchJump(const FVector& NewVelocity, EMe
 	{
 		EndSlide();
 	}
+	if (bIsCrouchHeld)
+	{
+		EndCrouchHold();
+	}
 
 	bIsSlamming = false;
 	SlamLandTime = -1000.f;
@@ -272,9 +356,17 @@ bool UMegaCharacterMovementComponent::TryDash()
 
 void UMegaCharacterMovementComponent::StartDash(const FVector& Direction)
 {
+	if (bIsGrappling)
+	{
+		StopGrapple();
+	}
 	if (bIsSliding)
 	{
 		EndSlide();
+	}
+	if (bIsCrouchHeld)
+	{
+		EndCrouchHold();
 	}
 	bIsSlamming = false;
 
@@ -298,7 +390,7 @@ void UMegaCharacterMovementComponent::EndDash(bool bApplyExitVelocity)
 }
 
 // ---------------------------------------------------------------------------------------------
-// Slide / slam
+// Slide / crouch / slam
 // ---------------------------------------------------------------------------------------------
 
 void UMegaCharacterMovementComponent::SetSlideInputHeld(bool bHeld)
@@ -311,31 +403,67 @@ void UMegaCharacterMovementComponent::SetSlideInputHeld(bool bHeld)
 		{
 			StartSlam();
 		}
-		else if (IsMovingOnGround() && !bIsSliding)
+		else if (IsMovingOnGround() && !bIsSliding && !bIsCrouchHeld)
 		{
-			if (bIsDashing)
-			{
-				EndDash(/*bApplyExitVelocity*/ false);
-			}
-			StartSlide();
+			BeginGroundSlideOrCrouch();
 		}
 	}
-	else if (bIsSliding)
+	else
 	{
-		EndSlide();
+		if (bIsSliding)
+		{
+			EndSlide();
+		}
+		if (bIsCrouchHeld)
+		{
+			EndCrouchHold();
+		}
+	}
+}
+
+bool UMegaCharacterMovementComponent::WantsToSlide() const
+{
+	return !GetMoveInputDirection2D().IsNearlyZero() || GetCarriedSpeed2D() > SlideMinSpeedWithoutInput;
+}
+
+void UMegaCharacterMovementComponent::BeginGroundSlideOrCrouch()
+{
+	if (WantsToSlide())
+	{
+		if (bIsDashing)
+		{
+			// Dash -> slide: the dash speed is in the momentum memory, so it carries into the slide.
+			EndDash(/*bApplyExitVelocity*/ false);
+		}
+		StartSlide();
+	}
+	else if (!bIsDashing)
+	{
+		StartCrouchHold();
 	}
 }
 
 void UMegaCharacterMovementComponent::StartSlide()
 {
-	// Prefer input direction, then current motion, then facing.
-	FVector Direction = GetMoveInputDirection2D();
+	const float CarriedSpeed = GetCarriedSpeed2D();
+	const FVector CarriedDirection = GetCarriedDirection2D();
+	const bool bCarryingMomentum = CarriedSpeed > SlideSpeed && !CarriedDirection.IsNearlyZero();
+
+	// With momentum, slide where we were already going; otherwise input, then facing.
+	FVector Direction = bCarryingMomentum ? CarriedDirection : GetMoveInputDirection2D();
 	if (Direction.IsNearlyZero())
 	{
-		Direction = Velocity.Size2D() > 100.f ? Velocity.GetSafeNormal2D() : GetFacingDirection2D();
+		Direction = !CarriedDirection.IsNearlyZero() ? CarriedDirection : GetFacingDirection2D();
 	}
 
 	SlideDirection = Direction;
+	CurrentSlideSpeed = FMath::Clamp(CarriedSpeed, SlideSpeed, FMath::Max(SlideSpeed, SlideMaxEntrySpeed));
+	SlideStartTime = GetWorldTime();
+
+	if (bIsCrouchHeld)
+	{
+		bIsCrouchHeld = false; // keep the capsule crouched; the slide reuses it
+	}
 	bIsSliding = true;
 	CharacterOwner->Crouch();
 	OnMegaSlideChanged.Broadcast(true);
@@ -344,11 +472,26 @@ void UMegaCharacterMovementComponent::StartSlide()
 void UMegaCharacterMovementComponent::EndSlide()
 {
 	bIsSliding = false;
-	if (CharacterOwner)
+	if (CharacterOwner && !bIsCrouchHeld)
 	{
 		CharacterOwner->UnCrouch(); // stays crouched automatically if there's a ceiling
 	}
 	OnMegaSlideChanged.Broadcast(false);
+}
+
+void UMegaCharacterMovementComponent::StartCrouchHold()
+{
+	bIsCrouchHeld = true;
+	CharacterOwner->Crouch();
+}
+
+void UMegaCharacterMovementComponent::EndCrouchHold()
+{
+	bIsCrouchHeld = false;
+	if (CharacterOwner && !bIsSliding)
+	{
+		CharacterOwner->UnCrouch();
+	}
 }
 
 void UMegaCharacterMovementComponent::StartSlam()
@@ -357,10 +500,18 @@ void UMegaCharacterMovementComponent::StartSlam()
 	{
 		EndDash(/*bApplyExitVelocity*/ false);
 	}
+	if (bIsGrappling)
+	{
+		StopGrapple();
+	}
 
 	bIsSlamming = true;
 	SlamStartZ = static_cast<float>(UpdatedComponent->GetComponentLocation().Z);
 	Velocity = FVector(0.f, 0.f, -SlamSpeed);
+
+	// A slam is a deliberate stop: don't carry pre-slam speed into a slide after landing.
+	MomentumSpeed = 0.f;
+	MomentumTime = GetWorldTime();
 }
 
 void UMegaCharacterMovementComponent::HandleLanded()
@@ -383,12 +534,99 @@ void UMegaCharacterMovementComponent::HandleLanded()
 }
 
 // ---------------------------------------------------------------------------------------------
+// Grapple
+// ---------------------------------------------------------------------------------------------
+
+void UMegaCharacterMovementComponent::StartGrapple(const FVector& WorldPoint, USceneComponent* AnchorComponent)
+{
+	if (!CharacterOwner || !UpdatedComponent)
+	{
+		return;
+	}
+
+	if (bIsDashing)
+	{
+		EndDash(/*bApplyExitVelocity*/ false);
+	}
+	if (bIsSliding)
+	{
+		EndSlide();
+	}
+	if (bIsCrouchHeld)
+	{
+		EndCrouchHold();
+	}
+	bIsSlamming = false;
+
+	const FVector ToPoint = WorldPoint - UpdatedComponent->GetComponentLocation();
+
+	if (GrappleMode == EMegaGrappleMode::Burst)
+	{
+		// One-shot: launch and let normal physics (gravity, air control) take over.
+		LaunchJump(ToPoint.GetSafeNormal() * BurstGrappleSpeed + FVector(0.f, 0.f, BurstGrappleUpBoost), EMegaJumpType::Grapple);
+		return;
+	}
+
+	GrappleAnchor = AnchorComponent;
+	GrappleWorldPoint = WorldPoint;
+	GrappleLocalPoint = AnchorComponent ? AnchorComponent->GetComponentTransform().InverseTransformPosition(WorldPoint) : WorldPoint;
+	bIsGrappling = true;
+
+	if (IsMovingOnGround() && ToPoint.Z > 0.0)
+	{
+		SetMovementMode(MOVE_Falling);
+	}
+
+	OnMegaGrappleChanged.Broadcast(true);
+}
+
+void UMegaCharacterMovementComponent::StopGrapple()
+{
+	if (!bIsGrappling)
+	{
+		return;
+	}
+	bIsGrappling = false;
+	GrappleAnchor.Reset();
+	OnMegaGrappleChanged.Broadcast(false);
+}
+
+FVector UMegaCharacterMovementComponent::GetGrapplePoint() const
+{
+	if (const USceneComponent* Anchor = GrappleAnchor.Get())
+	{
+		return Anchor->GetComponentTransform().TransformPosition(GrappleLocalPoint);
+	}
+	return GrappleWorldPoint;
+}
+
+void UMegaCharacterMovementComponent::UpdateGrapple(float DeltaTime)
+{
+	const FVector ToPoint = GetGrapplePoint() - UpdatedComponent->GetComponentLocation();
+	const double Distance = ToPoint.Size();
+	if (Distance <= GrappleReleaseDistance)
+	{
+		StopGrapple(); // keep velocity: momentum carries past the anchor
+		return;
+	}
+
+	const FVector Direction = ToPoint / Distance;
+	if (IsMovingOnGround() && Direction.Z > 0.1)
+	{
+		SetMovementMode(MOVE_Falling);
+	}
+
+	// Steer and accelerate toward the anchor at a constant rate, capped at MaxGrappleSpeed.
+	Velocity = FMath::VInterpConstantTo(Velocity, Direction * MaxGrappleSpeed, DeltaTime, GrappleAcceleration);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Walls
 // ---------------------------------------------------------------------------------------------
 
 void UMegaCharacterMovementComponent::ApplyWallSlide()
 {
-	if (!IsFalling() || bIsSlamming || bIsDashing || Velocity.Z >= -WallSlideMaxFallSpeed)
+	if (!IsFalling() || bIsSlamming || bIsDashing || bIsGrappling || Velocity.Z >= -WallSlideMaxFallSpeed)
 	{
 		return;
 	}

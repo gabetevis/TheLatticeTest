@@ -10,6 +10,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class UMegaCharacterMovementComponent;
+class UMegaGrappleComponent;
 class USkeletalMeshComponent;
 struct FInputActionValue;
 
@@ -32,6 +33,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Mega")
 	UCameraComponent* GetFirstPersonCamera() const { return FirstPersonCamera; }
 
+	UFUNCTION(BlueprintPure, Category="Mega")
+	UMegaGrappleComponent* GetGrapple() const { return Grapple; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -44,6 +48,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
 	TObjectPtr<USkeletalMeshComponent> FirstPersonArms;
 
+	/** Grapple hook. Its position is where the cable leaves the hand; move it in a child Blueprint's viewport. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<UMegaGrappleComponent> Grapple;
+
 	//~ Input (optional: empty slots are filled by FMegaDefaultInput at runtime) -------------------
 
 	UPROPERTY(EditDefaultsOnly, Category="Input") TObjectPtr<UInputMappingContext> DefaultMappingContext;
@@ -52,6 +60,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Input") TObjectPtr<UInputAction> JumpAction;
 	UPROPERTY(EditDefaultsOnly, Category="Input") TObjectPtr<UInputAction> DashAction;
 	UPROPERTY(EditDefaultsOnly, Category="Input") TObjectPtr<UInputAction> SlideAction;
+	UPROPERTY(EditDefaultsOnly, Category="Input") TObjectPtr<UInputAction> GrappleAction;
 
 	/** Degrees of rotation per raw look-input unit (2.5 matches Unreal's legacy controller scale). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Input", meta=(ClampMin="0.01"))
@@ -118,6 +127,8 @@ private:
 	void Input_Dash(const FInputActionValue& Value);
 	void Input_SlidePressed(const FInputActionValue& Value);
 	void Input_SlideReleased(const FInputActionValue& Value);
+	void Input_GrapplePressed(const FInputActionValue& Value);
+	void Input_GrappleReleased(const FInputActionValue& Value);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMegaCharacterMovementComponent> MegaMovement;

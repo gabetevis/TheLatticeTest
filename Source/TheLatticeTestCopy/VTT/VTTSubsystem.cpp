@@ -347,6 +347,7 @@ void UVTTSubsystem::ShowCallout(UVTTComponent* Component, int32 EntryIndex)
 	Callout.EntryIndex = EntryIndex;
 	Callout.Label = Entry.Label;
 	Callout.Body = Entry.Body;
+	Callout.Color = Component->GetEffectiveColor();
 	Callout.LastWorldBounds = Component->GetVTTWorldBounds();
 	Callout.TypeDuration = NumChars / FMath::Max(1.f, Settings->CharactersPerSecond);
 	Callout.HoldDuration = Entry.HoldDurationOverride > 0.f

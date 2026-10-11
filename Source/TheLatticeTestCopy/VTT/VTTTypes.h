@@ -17,11 +17,11 @@ struct FVTTEntry
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VTT")
 	FName Id;
 
-	/** Short header shown above the leader line, e.g. "SAFEGUARD // CLASS 4". */
+	/** Optional small header shown above the main text, e.g. "SAFEGUARD // CLASS 4". Leave empty for none. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VTT")
 	FText Label;
 
-	/** Main text, typed out below the line. Wraps automatically. */
+	/** Main text shown at the end of the line. Wraps automatically; line breaks are kept. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VTT", meta=(MultiLine="true"))
 	FText Body;
 
@@ -70,6 +70,7 @@ struct FVTTActiveCallout
 
 	FText Label;
 	FText Body;
+	FLinearColor Color = FLinearColor::White;
 
 	/** Last known world bounds; kept so the callout can animate out after the target is gone. */
 	FBox LastWorldBounds = FBox(ForceInit);

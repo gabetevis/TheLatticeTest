@@ -11,6 +11,7 @@
 #include "InputActionValue.h"
 #include "Player/MegaCharacterMovementComponent.h"
 #include "Player/MegaDefaultInput.h"
+#include "Player/MegaGrappleComponent.h"
 
 AMegaCharacter::AMegaCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMegaCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -40,6 +41,10 @@ AMegaCharacter::AMegaCharacter(const FObjectInitializer& ObjectInitializer)
 	FirstPersonArms->bCastDynamicShadow = false;
 	FirstPersonArms->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 
+	Grapple = CreateDefaultSubobject<UMegaGrappleComponent>(TEXT("Grapple"));
+	Grapple->SetupAttachment(FirstPersonCamera);
+	Grapple->SetRelativeLocation(FVector(30.f, 22.f, -22.f)); // lower right, like a hand
+
 	// The full-body mesh (if any) is for shadows/mirrors only.
 	GetMesh()->SetOwnerNoSee(true);
 }
@@ -59,7 +64,7 @@ void AMegaCharacter::BeginPlay()
 
 void AMegaCharacter::EnsureInputAssets()
 {
-	if (DefaultMappingContext && MoveAction && LookAction && JumpAction && DashAction && SlideAction)
+	if (DefaultMappingContext && MoveAction && LookAction && JumpAction && DashAction && SlideAction && GrappleAction)
 	{
 		return;
 	}
@@ -72,6 +77,7 @@ void AMegaCharacter::EnsureInputAssets()
 	if (!JumpAction) { JumpAction = Defaults.Jump; }
 	if (!DashAction) { DashAction = Defaults.Dash; }
 	if (!SlideAction) { SlideAction = Defaults.Slide; }
+	if (!GrappleAction) { GrappleAction = Defaults.Grapple; }
 }
 
 void AMegaCharacter::PawnClientRestart()
@@ -103,6 +109,8 @@ void AMegaCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	Input->BindAction(SlideAction, ETriggerEvent::Started, this, &AMegaCharacter::Input_SlidePressed);
 	Input->BindAction(SlideAction, ETriggerEvent::Completed, this, &AMegaCharacter::Input_SlideReleased);
 	Input->BindAction(SlideAction, ETriggerEvent::Canceled, this, &AMegaCharacter::Input_SlideReleased);
+	Input->BindAction(GrappleAction, ETriggerEvent::Started, this, &AMegaCharacter::Input_GrapplePressed);
+	Input->BindAction(GrappleAction, ETriggerEvent::Completed, this, &AMegaCharacter::Input_GrappleReleased);
 }
 
 void AMegaCharacter::Input_Move(const FInputActionValue& Value)
@@ -163,6 +171,22 @@ void AMegaCharacter::Input_SlideReleased(const FInputActionValue& Value)
 	if (MegaMovement)
 	{
 		MegaMovement->SetSlideInputHeld(false);
+	}
+}
+
+void AMegaCharacter::Input_GrapplePressed(const FInputActionValue& Value)
+{
+	if (Grapple)
+	{
+		Grapple->OnGrapplePressed();
+	}
+}
+
+void AMegaCharacter::Input_GrappleReleased(const FInputActionValue& Value)
+{
+	if (Grapple)
+	{
+		Grapple->OnGrappleReleased();
 	}
 }
 

@@ -9,7 +9,9 @@ code changes. If something here disagrees with the code, the code wins — fix t
 - **Game:** narrative first-person movement shooter about grief, set in a cyber-gothic brutalist
   megastructure (BLAME!-inspired). Gameplay splits into **puzzle/raid arenas** and **traversal**.
 - **Current milestone:** proof of concept — showcase the art. Systems in scope: the first-person
-  controller and the VTT. Everything else is roadmap.
+  controller (incl. grapple) and the VTT. Everything else is roadmap.
+- **Content is not in git yet** (needs Git LFS on Windows). Old Blueprint prototypes removed from
+  `Content/` are kept in `_RemovedAssets/` at the project root until the user deletes it.
 
 ---
 
@@ -19,10 +21,11 @@ code changes. If something here disagrees with the code, the code wins — fix t
 Source/TheLatticeTestCopy/
   TheLatticeTestCopy.Build.cs          module dependencies
   Core/
-    MegaGameMode             spawns MegaCharacter + MegaPlayerController
+    MegaGameMode             spawns MegaCharacter + MegaPlayerController (project default game mode)
   Player/
     MegaCharacter            input, camera feel, owns the movement component
-    MegaCharacterMovementComponent   dash / slide / slam / wall jump / coyote time
+    MegaCharacterMovementComponent   dash / slide / crouch / slam / wall jump / grapple pull / momentum
+    MegaGrappleComponent     grapple aim trace, cable visual, cooldown (ported from BP_FirstPersonCharacter)
     MegaPlayerController     creates the VTT overlay (the only HUD)
     MegaDefaultInput         code-built Enhanced Input fallback (no assets required)
   VTT/
@@ -30,7 +33,7 @@ Source/TheLatticeTestCopy/
     VTTSettings              Project Settings > Game > VTT (all tuning + style)
     VTTComponent             put on any actor to give it VTT text
     VTTSubsystem             registry, ambient + scripted triggering, callout lifetime
-    VTTOverlayWidget         draws callouts (frame, leader line, typed/scrambled text)
+    VTTOverlayWidget         draws callouts (thick box, straight line, bold text)
     VTTTriggerVolume         level-placed scripted trigger
 ```
 
@@ -50,27 +53,39 @@ class per file pair, folder = feature. Includes are module-root relative, e.g.
 | Class | Owns | Does not own |
 |---|---|---|
 | `AMegaCharacter` | Input binding, look, jump buffering, camera (eye height, FOV, roll, landing dip), first-person arms mesh | Movement rules |
-| `UMegaCharacterMovementComponent` | All movement rules and state; movement events | Input, camera |
+| `UMegaCharacterMovementComponent` | All movement rules and state (incl. grapple pull + tuning); movement events | Input, camera |
+| `UMegaGrappleComponent` | Grapple aiming, cable, cooldown, hold/toggle | Pull physics |
 | `AMegaPlayerController` | HUD/UI lifetime (VTT overlay), input mode | Gameplay |
 
 ### Movement model
 
-Dash, slide and slam are **states on top of `MOVE_Walking` / `MOVE_Falling`**, not custom
-movement modes. The component only overrides `CalcVelocity` (velocity while dashing/sliding)
-and `GetGravityZ` (0 while dashing). The engine keeps doing floor detection, step-up, slopes
-and ledges. This is why there is no `PhysCustom`.
+Dash, slide, crouch, slam and grapple are **states on top of `MOVE_Walking` / `MOVE_Falling`**,
+not custom movement modes. The component overrides `CalcVelocity` (velocity while
+dashing/sliding/grappling), `GetGravityZ` (0 while dashing or grappling) and `HandleImpact`
+(release grapple on head-on hits). The engine keeps doing floor detection, step-up, slopes and
+ledges. This is why there is no `PhysCustom`.
+
+**Momentum carry:** the component remembers the fastest horizontal speed of the last
+`MomentumGraceTime` (0.25s). A slide starts at that remembered speed (capped at
+`SlideMaxEntrySpeed`), holds it for `SlideMomentumHoldTime` (0.3s), then bleeds down to
+`SlideSpeed` at `SlideMomentumDecay`. So dash → slide, grapple → slide and air → slide keep
+their speed for about a second. Slide-jumps launch at the current (boosted) slide speed.
+A slam clears the memory on purpose.
 
 | Action | Input | Behaviour |
 |---|---|---|
 | Move | WASD / left stick | Fast accel/decel, air momentum preserved |
 | Jump | Space / A | Ground, coyote (0.12s), wall (3 per airtime), slide-jump, dash-jump, slam-jump; buffered 0.12s |
 | Dash | Shift / LB | 3 stamina charges, horizontal only, gravity off for 0.18s |
-| Slide | Ctrl / B (ground, hold) | Constant speed, light steering, capsule crouch |
+| Slide | Ctrl / B (ground, hold, while moving) | Moving = WASD held or carried speed > 1300. Carries momentum, light steering |
+| Crouch | Ctrl / B (ground, hold, while still) | Engine crouch, 450 cm/s crouch-walk |
 | Slam | Ctrl / B (air, press) | Straight down; jump within 0.25s of landing = slam jump scaled by fall height |
 | Wall cling | Push into wall while falling | Caps fall speed |
+| Grapple | F / RB | Sphere trace 4000cm from the eyes. Accelerating mode (default): steer + accelerate to 3500 cm/s, gravity off, auto-release at 200cm or on head-on impact; Burst mode: one launch. Jump = release with a hop; dash/slam cancel; press again to release. 0.4s cooldown |
 
 Events for feedback hookup: `OnMegaJumped(type)`, `OnMegaDashed(dir)`,
-`OnMegaSlideChanged(bool)`, `OnMegaSlamLanded(location, fallDistance)`.
+`OnMegaSlideChanged(bool)`, `OnMegaSlamLanded(location, fallDistance)`, `OnMegaGrappleChanged(bool)`;
+grapple component: `OnGrappleFired(anchor)`, `OnGrappleMissed`.
 
 All numbers are `EditAnywhere` under `Mega|*` categories on the movement component and
 `Camera`/`Input` on the character. Tune them in a child Blueprint (`BP_Player`) or in the
@@ -89,8 +104,10 @@ doesn't depend on the project's legacy input-scale settings.
 
 ## 3. VTT (Virtual Text Translator)
 
-The only HUD. A bracketed frame is drawn around a world object, a leader line runs out of it,
-and text is "translated" in (typed out with scrambled glyphs running ahead of the cursor).
+The only HUD. Deliberately simple: a thick box around a world object, one thick straight line
+off the middle of its side, and large bold text at the end of the line (optional small Label
+above it). One color for all three — project-wide in settings, overridable per VTT component
+(`bOverrideColor` / `Color`, or `SetVTTColor()` at runtime). Typewriter reveal is optional.
 
 ### Data flow
 
@@ -113,18 +130,20 @@ UVTTComponent (on actors) ──register──▶ UVTTSubsystem ◀──read ea
     pick a perceivable component (weighted toward screen center), then an entry (weighted toward unseen).
   - *Scripted:* `RequestCallout(Component, EntryId, Params)` queues a request; by default it waits
     until the target is perceivable (20s timeout), FIFO, optionally interrupting the oldest callout.
-  - *Lifetime:* frame intro → leader line → typing → hold (auto from text length) → outro.
+  - *Lifetime:* box grows in → line extends → typing → hold (auto from text length) → fade out.
     Dismissed early if the target stays unperceived for 0.75s or is destroyed.
 - **`UVTTOverlayWidget`**: pure C++ `UUserWidget`. `NativeTick` builds a draw list, `NativePaint`
-  emits Slate lines/boxes/text. Text side (left/right, up/down) is chosen once per callout so it
-  never flips mid-read; the text block is kept on screen.
-- **`UVTTSettings`** (Project Settings → Game → VTT): every timing, color, font, size and sound.
+  emits Slate boxes/lines/text. The box is four filled bars (clean corners at any thickness).
+  Text side is chosen once per callout (toward the emptier half, flipped if it wouldn't fit) so it
+  never flips mid-read; text is vertically centered on the line end and kept on screen.
+- **`UVTTSettings`** (Project Settings → Game → VTT): `Color`, box/line thickness, line length +
+  angle, font/typeface/size, outline, typewriter, timings, sounds.
 
 ### Authoring a VTT object (no code)
 
 1. Add the **VTT** component to an actor (or to the enemy Blueprint).
-2. Add entries: `Label` (short header), `Body` (the text), optional `Id` for scripted use.
-3. Optional: switch to `CustomBox` and fit the box, or set `MaxDistance`.
+2. Add entries: `Body` (the text), optional `Label` (small header), optional `Id` for scripted use.
+3. Optional: switch to `CustomBox` and fit the box, set `MaxDistance`, or override `Color`.
 
 Scripted moments: place an **VTT Trigger Volume**, set `Target Actor` + `Entry Id`.
 From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->RequestCallout(...)`.
@@ -138,7 +157,7 @@ From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->Reques
 
 ## 4. Editor setup (one time)
 
-1. World Settings → GameMode Override → `MegaGameMode` (or set it in Project Settings → Maps & Modes).
+1. `MegaGameMode` is the project default (`DefaultEngine.ini`), so levels use it unless overridden.
 2. Optional `BP_Player` (child of `MegaCharacter`) for the arms mesh and tuning; set it as the
    game mode's Default Pawn via a `BP_GameMode` child if you make one.
 3. Project Settings → Game → VTT for the look.
@@ -159,7 +178,9 @@ From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->Reques
 
 ## 6. Roadmap
 
-- [ ] Compile + feel pass in the test level (movement numbers are first-pass guesses)
+- [x] Compile + feel pass in the test level
+- [ ] Grapple feel pass (numbers are defaults; old BP values were not recoverable)
+- [ ] Grapple crosshair/aim feedback (currently no indicator: no HUD besides VTT)
 - [ ] Movement feedback: camera shake, audio, VFX hooked to movement events
 - [ ] VTT: optional per-entry voice/sound, rich-text emphasis, priority tiers
 - [ ] Combat: weapon base class, hitscan + projectile, damage
@@ -173,3 +194,7 @@ From C++: `VTTComponent->ShowVTT("SomeId")` or `UVTTSubsystem::Get(this)->Reques
 
 - **2026-10-10** — Initial player controller (movement, camera, default input), game mode,
   and the full VTT system (component, subsystem, overlay, settings, trigger volume).
+- **2026-10-10** — Momentum carry into slides; Ctrl = slide only when moving, crouch when still;
+  VTT restyled (thick box / straight line / bold text, single configurable color + per-object
+  override); grapple ported from Blueprint to C++ (`MegaGrappleComponent` + movement state, F key,
+  CableComponent plugin); old Blueprint VTT removed; MegaGameMode made project default.

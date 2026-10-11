@@ -3,6 +3,7 @@
 #include "Engine/CollisionProfile.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "VTT/VTTSettings.h"
 #include "VTT/VTTSubsystem.h"
 
 UVTTComponent::UVTTComponent()
@@ -48,6 +49,17 @@ bool UVTTComponent::ShowVTT(FName EntryId)
 void UVTTComponent::SetVTTEnabled(bool bEnabled)
 {
 	bVTTEnabled = bEnabled;
+}
+
+void UVTTComponent::SetVTTColor(FLinearColor NewColor)
+{
+	bOverrideColor = true;
+	Color = NewColor;
+}
+
+FLinearColor UVTTComponent::GetEffectiveColor() const
+{
+	return bOverrideColor ? Color : UVTTSettings::Get()->Color;
 }
 
 FBox UVTTComponent::GetVTTWorldBounds() const

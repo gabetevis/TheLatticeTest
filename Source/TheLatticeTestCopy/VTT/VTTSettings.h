@@ -63,10 +63,10 @@ public:
 	//~ Timing ---------------------------------------------------------------------------------
 
 	UPROPERTY(Config, EditAnywhere, Category="Timing", meta=(ClampMin="0", ForceUnits="s"))
-	float BoxIntroDuration = 0.25f;
+	float BoxIntroDuration = 0.12f;
 
 	UPROPERTY(Config, EditAnywhere, Category="Timing", meta=(ClampMin="0", ForceUnits="s"))
-	float LineIntroDuration = 0.18f;
+	float LineIntroDuration = 0.1f;
 
 	UPROPERTY(Config, EditAnywhere, Category="Timing", meta=(ClampMin="1"))
 	float CharactersPerSecond = 60.f;
@@ -85,80 +85,68 @@ public:
 
 	//~ Style ----------------------------------------------------------------------------------
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Color")
-	FLinearColor FrameColor = FLinearColor(0.55f, 1.f, 0.85f, 1.f);
+	/** Color of the box, line and text. Individual VTT components can override it. */
+	UPROPERTY(Config, EditAnywhere, Category="Style")
+	FLinearColor Color = FLinearColor::White;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Color")
-	FLinearColor LabelColor = FLinearColor(0.55f, 1.f, 0.85f, 1.f);
+	UPROPERTY(Config, EditAnywhere, Category="Style|Box", meta=(ClampMin="0.5"))
+	float BoxThickness = 4.f;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Color")
-	FLinearColor BodyColor = FLinearColor(0.9f, 0.95f, 0.95f, 1.f);
+	/** Space between the object's outline and the box. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Box", meta=(ClampMin="0"))
+	float BoxPadding = 10.f;
 
-	/** Color of not-yet-translated (scrambled) characters while typing. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Color")
-	FLinearColor ScrambleColor = FLinearColor(0.55f, 1.f, 0.85f, 0.6f);
+	UPROPERTY(Config, EditAnywhere, Category="Style|Box", meta=(ClampMin="0"))
+	float MinBoxSize = 40.f;
 
-	/** Panel behind the text for legibility. Alpha 0 disables it. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Color")
-	FLinearColor TextBackdropColor = FLinearColor(0.f, 0.f, 0.f, 0.45f);
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="0.5"))
+	float LineThickness = 4.f;
 
-	/** Opacity of the thin full rectangle drawn between the corner brackets. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Frame", meta=(ClampMin="0", ClampMax="1"))
-	float FrameOutlineOpacity = 0.25f;
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="0"))
+	float LineLength = 140.f;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Frame", meta=(ClampMin="0"))
-	float FrameThickness = 1.5f;
+	/** 0 = horizontal. Positive tilts the line upward, negative downward. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Line", meta=(ClampMin="-75", ClampMax="75", ForceUnits="deg"))
+	float LineAngleDegrees = 0.f;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Frame", meta=(ClampMin="0"))
-	float CornerLength = 14.f;
+	/** Gap between the end of the line and the text. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0"))
+	float TextGap = 12.f;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Frame", meta=(ClampMin="0"))
-	float BoxPadding = 8.f;
-
-	UPROPERTY(Config, EditAnywhere, Category="Style|Frame", meta=(ClampMin="0"))
-	float MinBoxSize = 28.f;
-
-	UPROPERTY(Config, EditAnywhere, Category="Style|Leader", meta=(ClampMin="0"))
-	float LineThickness = 1.25f;
-
-	/** Length of the diagonal segment leaving the box. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Leader", meta=(ClampMin="0"))
-	float LeaderLength = 70.f;
-
-	/** Horizontal gap between the elbow and the text block. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Leader", meta=(ClampMin="0"))
-	float ShelfLength = 24.f;
-
+	/** Text wraps beyond this width. */
 	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="50"))
-	float TextMaxWidth = 340.f;
+	float TextMaxWidth = 560.f;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0"))
-	float TextGap = 4.f;
-
-	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0"))
-	float TextBackdropPadding = 6.f;
-
-	/** Font asset. Empty = engine default (Roboto). */
+	/** Font asset. Empty = engine default (Roboto Bold). */
 	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(AllowedClasses="/Script/Engine.Font"))
 	TSoftObjectPtr<UFont> Font;
 
-	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="4"))
-	int32 LabelFontSize = 11;
+	/** Typeface inside the font asset (e.g. "Bold", "Black"). Ignored if the font doesn't have it. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text")
+	FName Typeface = TEXT("Bold");
 
+	/** Main text size. */
 	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="4"))
-	int32 BodyFontSize = 13;
+	int32 FontSize = 30;
+
+	/** Size of the optional Label line shown above the main text. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="4"))
+	int32 LabelFontSize = 16;
 
 	/** Extra spacing between letters, in thousandths of an em. */
 	UPROPERTY(Config, EditAnywhere, Category="Style|Text")
-	int32 LetterSpacing = 60;
+	int32 LetterSpacing = 0;
 
-	/** Number of scrambled characters running ahead of the typing cursor ("translation" effect). */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0"))
-	int32 ScrambleLeadCharacters = 6;
+	/** Dark outline around letters for legibility over bright areas. 0 = off. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text", meta=(ClampMin="0", ClampMax="8"))
+	int32 TextOutlineSize = 0;
 
-	/** Flicker and jitter while callouts appear and disappear. */
-	UPROPERTY(Config, EditAnywhere, Category="Style|Effects")
-	bool bGlitchEffects = true;
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text")
+	FLinearColor TextOutlineColor = FLinearColor::Black;
+
+	/** Type the text out letter by letter. Off = text appears all at once. */
+	UPROPERTY(Config, EditAnywhere, Category="Style|Text")
+	bool bTypewriter = true;
 
 	//~ Audio ----------------------------------------------------------------------------------
 

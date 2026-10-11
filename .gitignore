@@ -22,3 +22,6 @@ Plugins/**/Intermediate/
 # OS
 Thumbs.db
 .DS_Store
+
+# Holding area for assets removed from Content/
+_RemovedAssets/
