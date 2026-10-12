@@ -74,7 +74,7 @@ FMegaDefaultInput FMegaDefaultInput::Create(UObject* Outer)
 	Context->MapKey(Result.Dash, EKeys::LeftShift);
 	Context->MapKey(Result.Dash, EKeys::Gamepad_LeftShoulder);
 
-	Context->MapKey(Result.Slide, EKeys::LeftControl);
+	Context->MapKey(Result.Slide, EKeys::LeftAlt);
 	Context->MapKey(Result.Slide, EKeys::Gamepad_FaceButton_Right);
 
 	Context->MapKey(Result.Grapple, EKeys::F);

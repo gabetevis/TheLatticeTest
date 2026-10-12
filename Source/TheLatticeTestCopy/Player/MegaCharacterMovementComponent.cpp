@@ -9,7 +9,7 @@ UMegaCharacterMovementComponent::UMegaCharacterMovementComponent()
 	// Fast, snappy base movement. Everything here is a starting point for feel tuning.
 	MaxWalkSpeed = 1150.f;
 	MaxWalkSpeedCrouched = 450.f;
-	MaxAcceleration = 9000.f;
+	MaxAcceleration = 12000.f;
 	BrakingDecelerationWalking = 7000.f;
 	GroundFriction = 10.f;
 
