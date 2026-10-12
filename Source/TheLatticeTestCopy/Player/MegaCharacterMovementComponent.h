@@ -110,24 +110,24 @@ public:
 	//~ Tuning: Dash ----------------------------------------------------------------------------
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashSpeed = 5000.f;
+	float DashSpeed = 3000.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0.01", ForceUnits="s"))
 	float DashDuration = 0.3f;
 
 	/** Horizontal speed kept when a dash ends naturally. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashExitSpeed = 2500.f;
+	float DashExitSpeed = 1300.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="1"))
-	int32 MaxDashCharges = 5;
+	int32 MaxDashCharges = 3;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0"))
 	float DashChargesRegenPerSecond = 0.8f;
 
 	/** Jumping during a grounded dash launches with this horizontal speed (the "dash jump"). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float DashJumpHorizontalSpeed = 5000.f;
+	float DashJumpHorizontalSpeed = 3000.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Dash", meta=(ClampMin="0"))
 	float DashJumpVerticalScale = 0.75f;
@@ -145,35 +145,35 @@ public:
 
 	/** Starting speed of a slide from a standstill or walk. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideSpeed = 2000.f;
+	float SlideSpeed = 1000.f;
 
 	/** Constant slowdown while sliding. With the default gravity, slopes steeper than ~12 degrees overcome it. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
-	float SlideFriction = 600.f;
+	float SlideFriction = 450.f;
 
 	/** How strongly slopes speed up / slow down a slide. 1 = real gravity (incl. GravityScale). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0"))
-	float SlideGravityScale = 1.f;
+	float SlideGravityScale = 1.5f;
 
 	/** Slides can't get faster than this from slopes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMaxSpeed = 8000.f;
+	float SlideMaxSpeed = 10000.f;
 
 	/** Below this speed the slide ends and becomes a crouch. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMinSpeed = 450.f;
+	float SlideMinSpeed = 500.f;
 
 	/** Cap on how much carried speed (dash, grapple, fall) a slide can start with. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMaxEntrySpeed = 8000.f;
+	float SlideMaxEntrySpeed = 10000.f;
 
 	/** Carried speed above SlideSpeed is held this long before it starts fading. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="s"))
-	float SlideMomentumHoldTime = 0.3f;
+	float SlideMomentumHoldTime = 0.5f;
 
 	/** How fast carried speed fades after the hold time (on top of friction). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
-	float SlideMomentumDecay = 2000.f;
+	float SlideMomentumDecay = 1000.f;
 
 	/** Without movement input, the slide button only slides when moving faster than this; otherwise it crouches. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
@@ -243,7 +243,7 @@ public:
 
 	/** Accelerating mode: top pull speed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float MaxGrappleSpeed = 3500.f;
+	float MaxGrappleSpeed = 3800.f;
 
 	/** Accelerating mode: release automatically this close to the anchor. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Grapple", meta=(ClampMin="0", ForceUnits="cm"))
