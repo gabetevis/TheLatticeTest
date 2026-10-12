@@ -14,6 +14,7 @@ Packaged/
 *.VC.opendb
 .idea/
 .vscode/
+__External*/
 
 # Plugin build output
 Plugins/**/Binaries/
