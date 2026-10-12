@@ -149,7 +149,7 @@ public:
 
 	/** Constant slowdown while sliding. With the default gravity, slopes steeper than ~12 degrees overcome it. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
-	float SlideFriction = 450.f;
+	float SlideFriction = 250.f;
 
 	/** How strongly slopes speed up / slow down a slide. 1 = real gravity (incl. GravityScale). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0"))
@@ -157,7 +157,7 @@ public:
 
 	/** Slides can't get faster than this from slopes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
-	float SlideMaxSpeed = 5000.f;
+	float SlideMaxSpeed = 7000.f;
 
 	/** Below this speed the slide ends and becomes a crouch. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
@@ -169,11 +169,11 @@ public:
 
 	/** Carried speed above SlideSpeed is held this long before it starts fading. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="s"))
-	float SlideMomentumHoldTime = 0.3f;
+	float SlideMomentumHoldTime = 0.6f;
 
 	/** How fast carried speed fades after the hold time (on top of friction). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s^2"))
-	float SlideMomentumDecay = 2000.f;
+	float SlideMomentumDecay = 1000.f;
 
 	/** Without movement input, the slide button only slides when moving faster than this; otherwise it crouches. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mega|Slide", meta=(ClampMin="0", ForceUnits="cm/s"))
