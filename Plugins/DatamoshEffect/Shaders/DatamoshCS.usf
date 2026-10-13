@@ -1,0 +1,178 @@
+// Copyright 2025 Andrew Laptev. All Rights Reserved.
+
+#include "DatamoshCommon.ush"
+
+// Shader parameters
+Texture2D ScreenSpaceMaskTexture;
+Texture2D RenderTargetMaskTexture;
+
+#define SHARPNESS_INTENSITY 0
+
+SamplerState RenderTargetSampler;
+float2 RenderTargetTextureSize;
+float2 SceneColorTextureSize;
+float2 RenderTargetUVScale;
+
+// Output
+RWTexture2D<float4> Output;
+
+// Offsets for neighboring pixels (sampling kernel)
+static const float2 offsets[4] =
+{
+    float2(-1, 0), // Left
+    float2(1, 0), // Right
+    float2(0, -1), // Up
+    float2(0, 1) // Down
+};
+
+float3 ApplySharpening(float2 uv, float2 TextureSize)
+{
+    float3 centerColor = Texture2DSample(InputTexture, View.SharedBilinearClampedSampler, uv).rgb * View.OneOverPreExposure;
+    
+    float3 blurColor = 0;
+    for (int i = 0; i < 4; i++)
+    {
+        float2 sampleUV = uv + (offsets[i] / TextureSize);
+        blurColor += Texture2DSample(InputTexture, View.SharedBilinearClampedSampler, sampleUV).rgb * View.OneOverPreExposure;
+    }
+    blurColor /= 4; // Average the neighboring samples
+
+    // Compute the sharpness effect with conditional blending
+    float3 sharpenedColor = lerp(centerColor, centerColor + (centerColor - blurColor), DatamoshSharpness);
+    
+    return clamp(sharpenedColor, 0.0, 1.0);
+}
+
+float3 ProcessDistance(float4 Depth, float3 datamosh, float3 currentColor)
+{
+    if (DatamoshDistance != 0)
+    {
+        bool bUseLessThanComparison = DatamoshDistance < 0;
+        float AdjustedDepthDistance = 1.0 / abs(DatamoshDistance);
+
+        bool bIsWithinDepthRange = bUseLessThanComparison
+                ? (Depth.r < AdjustedDepthDistance / 100)
+                : (Depth.r > AdjustedDepthDistance / 100);
+
+        return bIsWithinDepthRange ? datamosh : currentColor;
+    }
+    else
+    {
+        return datamosh;
+    }
+}
+
+float3 CreateTrailFromMask(float3 CurrentColor, float3 DatamoshColor, float2 MaskColor)
+{
+    float3 OutputValue = CurrentColor;
+
+    switch (DatamoshTrail)
+    {
+        case 1:
+            //OutputValue = select(CurrentColor, DatamoshColor, MaskColor.r > 0);
+            if (MaskColor.r > 0)
+            {
+                OutputValue = DatamoshColor;
+            }
+            break;
+        case 2:
+            // Excluding the rendering of the effect on the object itself in the mask, by separating it with a green channel
+            if (MaskColor.g > 0)
+            {
+                OutputValue = CurrentColor;
+            }
+            else if (MaskColor.r > 0)
+            {
+                OutputValue = DatamoshColor;
+            }
+            break;
+        default:
+            OutputValue = DatamoshColor;
+            break;
+    }
+    return OutputValue;
+}
+
+// Check that we are in scope
+[numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
+void DatamoshScreenSpaceCS(uint2 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (any(DispatchThreadId >= ViewportRect.zw))
+    {
+        return;
+    }
+
+    const float2 UV = (float2((View.ViewRectMin.xy) + (DispatchThreadId + 0.5)) * ViewportInvSize);
+    const float2 scaledUV = UV * UVScale;
+    const float2 uvRound = round(scaledUV * (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize)) / (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize);
+
+    float4 Velocity = Texture2DSample(VelocityTexture, View.SharedBilinearClampedSampler, scaledUV);
+    float4 Depth = Texture2DSample(DepthTexture, View.SharedBilinearClampedSampler, scaledUV);
+
+    float noise = GenerateNoise(View.RealTime, uvRound.x + uvRound.y * View.BufferSizeAndInvSize.x);
+    
+    //Calculate velocity
+    float4 DecodedVelocity = float4(VelocityLookup(Depth, uvRound, Velocity, 0), 1, 1);
+    float4 ProcessedVelocity = max(abs(DecodedVelocity) - round(noise / 1.4), 0) * sign(DecodedVelocity);
+    float2 mvUV = float2(scaledUV.x - (ProcessedVelocity.x + DatamoshMotion.x), scaledUV.y + (ProcessedVelocity.y + DatamoshMotion.y));
+
+    //Clamping motion vector uv to make sure that we prevent artifacts from appearing in the texture
+    float2 mvUVC = clamp(mvUV, View.BufferBilinearUVMinMax.xy, View.BufferBilinearUVMinMax.zw);
+    mvUVC = mvUVC / UVScale;
+
+    float4 maskColor = Texture2DSample(ScreenSpaceMaskTexture, View.SharedBilinearClampedSampler, UV);
+
+    float3 currentColor = Texture2DSample(InputTexture, View.SharedBilinearClampedSampler, scaledUV).rgb;
+    float3 previousColor = Texture2DSample(PreviousTexture, View.SharedBilinearClampedSampler, mvUVC).rgb;
+   
+    float datamoshAlpha = SelectStyle(ProcessedVelocity.a);
+       
+    float3 datamoshColor = lerp(currentColor, previousColor, datamoshAlpha);
+    
+    float3 OutputColor = CreateTrailFromMask(currentColor, datamoshColor, maskColor.rg);
+    OutputColor = ProcessDistance(Depth, OutputColor, currentColor);
+
+    // Write output
+    Output[View.ViewRectMin.xy + DispatchThreadId] = float4(OutputColor, 1);
+
+}
+
+[numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
+void DatamoshWriteRenderTargetCS(uint2 DispatchThreadId : SV_DispatchThreadID)
+{
+    const float2 UV = (DispatchThreadId + 0.5) / RenderTargetTextureSize;
+
+    const float2 scaledUV = UV * UVScale;
+    const float2 uvRound = round(scaledUV * (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize)) / (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize);
+    
+    float4 Velocity = Texture2DSample(VelocityTexture, View.SharedBilinearClampedSampler, scaledUV);
+    float4 Depth = Texture2DSample(DepthTexture, View.SharedBilinearClampedSampler, scaledUV);
+
+    float noise = GenerateNoise(View.RealTime, uvRound.x + uvRound.y * View.BufferSizeAndInvSize.x);
+    
+    //Calculate velocity
+    float4 DecodedVelocity = float4(VelocityLookup(Depth, uvRound, Velocity, DatamoshVelocityCompensation), 1, 1);
+    float4 ProcessedVelocity = max(abs(DecodedVelocity) - round(noise / 1.4), 0) * sign(DecodedVelocity);
+    float2 mvUV = float2(scaledUV.x - (ProcessedVelocity.x + DatamoshMotion.x), scaledUV.y + (ProcessedVelocity.y + DatamoshMotion.y));
+
+    //Clamping motion vector uv to make sure that we prevent artifacts from appearing in the texture
+    float2 mvUVC = clamp(mvUV, View.BufferBilinearUVMinMax.xy, View.BufferBilinearUVMinMax.zw);
+    mvUVC = mvUVC / UVScale;
+
+    float4 maskColor = Texture2DSample(RenderTargetMaskTexture, View.SharedBilinearClampedSampler, UV);
+
+    // Comment out PreExposure correction if you're experiencing exposure issues when using the plugin.
+    float3 currentColor = Texture2DSample(InputTexture, View.SharedBilinearClampedSampler, scaledUV).rgb * View.OneOverPreExposure; // PreExposure correction --- * View.OneOverPreExposure;
+
+    float3 previousColor = Texture2DSample(PreviousTexture, View.SharedBilinearClampedSampler, mvUVC).rgb;
+    float datamoshAlpha = SelectStyle(ProcessedVelocity.a);
+    
+    float3 datamoshColor = lerp(currentColor, previousColor, datamoshAlpha);
+
+    float3 OutputColor = CreateTrailFromMask(currentColor, datamoshColor, maskColor.rg);
+    OutputColor = ProcessDistance(Depth, OutputColor, currentColor);
+
+    // Write output
+    Output[View.ViewRectMin.xy + DispatchThreadId] = float4(OutputColor, 1);
+
+}

@@ -1,0 +1,55 @@
+// Copyright 2025 Andrew Laptev. All Rights Reserved.
+
+#include "DatamoshCommon.ush"
+
+// Shader parameters
+Texture2D CustomDepthTexture;
+Texture2D<uint2> StencilTexture;
+int StencilValue;
+float2 StencilTextureSize;
+
+RWTexture2D<float4> Output;
+
+// Check that we are in scope
+[numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
+void DatamoshCreateMaskCS(uint2 DispatchThreadId : SV_DispatchThreadID)
+{
+    // Calculate UV coordinates
+    //const float2 UV = (float2((View.ViewRectMin.xy) + (DispatchThreadId + 0.5)) * ViewportInvSize);
+    const float2 UV = (DispatchThreadId.xy + 0.5) / ViewportInvSize;
+    const float2 scaledUV = UV * UVScale;
+    const float2 uvRound = round(scaledUV * (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize)) / (View.BufferSizeAndInvSize.xy / DatamoshNoiseSize);
+    
+    float4 originalMaskColor = Texture2DSample(InputTexture, View.SharedBilinearClampedSampler, scaledUV);
+
+    uint2 stencilUV = ((DispatchThreadId.xy + 0.5) * StencilTextureSize) / ViewportInvSize;
+    uint2 TextureStencilValue = StencilTexture.Load(uint3(stencilUV * UVScale, 0));
+
+    float4 Velocity = Texture2DSample(VelocityTexture, View.SharedBilinearClampedSampler, scaledUV);
+    float4 Depth = Texture2DSample(DepthTexture, View.SharedBilinearClampedSampler, scaledUV);
+    
+    float noise = GenerateNoise(View.RealTime, uvRound.x + uvRound.y * View.BufferSizeAndInvSize.x);
+    
+    // Determine if we should use the stencil-based color
+    bool useStencil = (StencilValue == 0) || (TextureStencilValue.y == StencilValue);
+    float4 externalColor = useStencil ? Texture2DSample(CustomDepthTexture, View.SharedBilinearClampedSampler, scaledUV) : float4(0, 0, 0, 0);
+
+    //float4 externalColor = Texture2DSample(CustomDepthTexture, View.SharedBilinearClampedSampler, scaledUV);
+    // Update maskColor with external color
+    originalMaskColor = externalColor;
+
+    // Calculate motion vectors and velocity adjustments
+    float4 DecodedVelocity = float4(VelocityLookup(Depth, uvRound, Velocity, 0), 1, 1);
+    float4 ProcessedVelocity = max(abs(DecodedVelocity) - round(noise / 1/4), 0) * sign(DecodedVelocity);
+    float2 mvUV = float2(scaledUV.x - (ProcessedVelocity.x + DatamoshMotion.x), scaledUV.y + (ProcessedVelocity.y + DatamoshMotion.y));
+    mvUV = mvUV / UVScale;
+    
+    float4 maskColor = Texture2DSample(PreviousTexture, View.SharedBilinearClampedSampler, mvUV);
+
+    // Combine mask and color
+    maskColor = float4(maskColor.r, originalMaskColor.r, 0, 0);
+    float3 datamoshedMaskColor = lerp(originalMaskColor.rgb, maskColor.rgb, DatamoshTrailFactor);
+
+    // Write output
+    Output[View.ViewRectMin.xy + DispatchThreadId] = float4(datamoshedMaskColor.rgb, 1);
+}

@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"Version": 2,
+	"VersionName": "1.0.1",
+	"FriendlyName": "Datamosh Effect",
+	"Description": "Post process shader that creates a frame blending effect by simulating a video editing technique in which the footage is manipulated to look 'trippy' or 'glitchy,' usually by manual compression.",
+	"Category": "Rendering",
+	"CreatedBy": "Andrew Laptev",
+	"CreatedByURL": "https://www.unrealengine.com/marketplace/en-US/profile/Petya",
+	"DocsURL": "https://docs.google.com/document/d/1By_e7WcgavQYuscnc3StirpjPEhltuXiff9-FEz8W0I/edit?usp=sharing",
+	"MarketplaceURL": "https://www.fab.com/listings/f54fa19f-b19a-4330-88a6-a467f6a00bca",
+	"SupportURL": "mailto:pety4n@gmail.com",
+	"EngineVersion": "5.6.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "DatamoshEffect",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac"
+			]
+		}
+	]
+}
