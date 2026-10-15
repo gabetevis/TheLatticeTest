@@ -12,6 +12,8 @@ class UInputMappingContext;
 class UMegaCharacterMovementComponent;
 class UMegaGrappleComponent;
 class USkeletalMeshComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
 struct FInputActionValue;
 
 UCLASS()
@@ -36,8 +38,16 @@ public:
 	UFUNCTION(BlueprintPure, Category="Mega")
 	UMegaGrappleComponent* GetGrapple() const { return Grapple; }
 
+	/** Loads the TOOL meshes and positions every part. Safe to call again after changing the Tool settings. */
+	UFUNCTION(BlueprintCallable, Category="Tool")
+	void ApplyToolLayout();
+
 protected:
 	virtual void BeginPlay() override;
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
 	//~ Components -------------------------------------------------------------------------------
 
@@ -51,6 +61,53 @@ protected:
 	/** Grapple hook. Its position is where the cable leaves the hand; move it in a child Blueprint's viewport. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
 	TObjectPtr<UMegaGrappleComponent> Grapple;
+
+	/** Pivot of the forearm weapon (the TOOL). Attached to the camera; all three TOOL parts hang off it. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<USceneComponent> ToolRoot;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<UStaticMeshComponent> ToolFrontCuff;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<UStaticMeshComponent> ToolRearCuff;
+
+	/** The flip-up screen. Its pivot is the hinge, so rotating it opens/closes the screen. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	TObjectPtr<UStaticMeshComponent> ToolScreen;
+
+	//~ TOOL (forearm weapon) ------------------------------------------------------------------------
+	// Tweak live: play, press F8 to eject, select the character in the Outliner, edit these.
+
+	UPROPERTY(EditDefaultsOnly, Category="Tool") TSoftObjectPtr<UStaticMesh> ToolFrontCuffMesh;
+	UPROPERTY(EditDefaultsOnly, Category="Tool") TSoftObjectPtr<UStaticMesh> ToolRearCuffMesh;
+	UPROPERTY(EditDefaultsOnly, Category="Tool") TSoftObjectPtr<UStaticMesh> ToolScreenMesh;
+
+	/** Where the TOOL sits relative to the camera: X forward, Y right, Z up. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool", meta=(ForceUnits="cm"))
+	FVector ToolOffset = FVector(30.1f, 25.8f, -20.6f);
+
+	/** Yaw -90 turns the barrel (modeled along the mesh's +Y) to face the camera's forward. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool")
+	FRotator ToolRotation = FRotator(0.f, -90.f, 0.f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool", meta=(ClampMin="0.01"))
+	float ToolScale = 0.01f; // the current FBX imports 100x too large; set to 1 after re-exporting at the right scale
+
+	/**
+	 * Recenters the parts on the rear cuff's bounds, so it doesn't matter where the model sat in Blender.
+	 * Turn off once the meshes are exported with their pivot at the attach point.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool")
+	bool bCenterToolOnRearCuff = true;
+
+	/** The screen's hinge position exactly as Blender showed it (N panel > Location), in cm. Converted to Unreal axes at runtime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool", meta=(ForceUnits="cm"))
+	FVector ToolScreenHingeBlender = FVector::ZeroVector; // current screen mesh shares the cuffs' origin
+
+	/** Extra rotation around the hinge (e.g. Roll to flip the screen open/closed). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tool")
+	FRotator ToolScreenRotation = FRotator::ZeroRotator;
 
 	//~ Input (optional: empty slots are filled by FMegaDefaultInput at runtime) -------------------
 

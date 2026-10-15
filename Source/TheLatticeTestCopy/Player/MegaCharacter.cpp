@@ -3,7 +3,9 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/StaticMesh.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/CollisionProfile.h"
@@ -45,9 +47,94 @@ AMegaCharacter::AMegaCharacter(const FObjectInitializer& ObjectInitializer)
 	Grapple->SetupAttachment(FirstPersonCamera);
 	Grapple->SetRelativeLocation(FVector(30.f, 22.f, -22.f)); // lower right, like a hand
 
+	// The TOOL: a forearm weapon made of three static meshes under one pivot.
+	ToolRoot = CreateDefaultSubobject<USceneComponent>(TEXT("ToolRoot"));
+	ToolRoot->SetupAttachment(FirstPersonCamera);
+
+	auto MakeToolPart = [this](const TCHAR* Name)
+	{
+		UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Part->SetupAttachment(ToolRoot);
+		Part->SetOnlyOwnerSee(true);            // viewmodel: only the player sees it
+		Part->SetCastShadow(false);             // a floating arm-weapon shadow would look wrong
+		Part->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+		Part->SetGenerateOverlapEvents(false);
+		return Part;
+	};
+	ToolFrontCuff = MakeToolPart(TEXT("ToolFrontCuff"));
+	ToolRearCuff = MakeToolPart(TEXT("ToolRearCuff"));
+	ToolScreen = MakeToolPart(TEXT("ToolScreen"));
+
+	ToolFrontCuffMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_FrontCuff.SM_TOOL_FrontCuff")));
+	ToolRearCuffMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_RearCuff.SM_TOOL_RearCuff")));
+	ToolScreenMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_Screen.SM_TOOL_Screen")));
+
 	// The full-body mesh (if any) is for shadows/mirrors only.
 	GetMesh()->SetOwnerNoSee(true);
 }
+
+void AMegaCharacter::ApplyToolLayout()
+{
+	if (!ToolRoot)
+	{
+		return;
+	}
+
+	ToolRoot->SetRelativeLocationAndRotation(ToolOffset, ToolRotation);
+	ToolRoot->SetRelativeScale3D(FVector(ToolScale));
+
+	// Soft references so a missing/renamed asset just logs a warning instead of breaking the character.
+	auto LoadPart = [](UStaticMeshComponent* Part, const TSoftObjectPtr<UStaticMesh>& MeshRef) -> UStaticMesh*
+	{
+		UStaticMesh* Mesh = MeshRef.IsNull() ? nullptr : MeshRef.LoadSynchronous();
+		if (!Mesh && !MeshRef.IsNull())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("TOOL: could not load %s (imported and saved?)"), *MeshRef.ToString());
+		}
+		Part->SetStaticMesh(Mesh);
+		return Mesh;
+	};
+	const UStaticMesh* Front = LoadPart(ToolFrontCuff, ToolFrontCuffMesh);
+	const UStaticMesh* Rear = LoadPart(ToolRearCuff, ToolRearCuffMesh);
+	LoadPart(ToolScreen, ToolScreenMesh);
+
+	// Cuffs share one pivot (wherever Blender's world origin was). Optionally shift them so the rear cuff
+	// sits on ToolRoot regardless of where the model was built.
+	FBox CuffBounds(ForceInit);
+	if (Front) { CuffBounds += Front->GetBoundingBox(); }
+	if (Rear) { CuffBounds += Rear->GetBoundingBox(); }
+	const FVector Center = (bCenterToolOnRearCuff && Rear) ? Rear->GetBoundingBox().GetCenter() : FVector::ZeroVector;
+
+	ToolFrontCuff->SetRelativeLocation(-Center);
+	ToolRearCuff->SetRelativeLocation(-Center);
+
+	// Blender and Unreal disagree on the Y axis direction, so the hinge is normally (X, -Y, Z) in Unreal.
+	// Pick whichever reading actually lands on the cuffs, in case the importer didn't flip it.
+	const FVector HingeFlipped(ToolScreenHingeBlender.X, -ToolScreenHingeBlender.Y, ToolScreenHingeBlender.Z);
+	FVector Hinge = HingeFlipped;
+	if (CuffBounds.IsValid &&
+		CuffBounds.ComputeSquaredDistanceToPoint(ToolScreenHingeBlender) < CuffBounds.ComputeSquaredDistanceToPoint(HingeFlipped))
+	{
+		Hinge = ToolScreenHingeBlender;
+	}
+	ToolScreen->SetRelativeLocationAndRotation(Hinge - Center, ToolScreenRotation);
+
+	UE_LOG(LogTemp, Log, TEXT("TOOL: cuff bounds size %s cm, recentered by %s, screen hinge %s"),
+		*CuffBounds.GetSize().ToCompactString(), *Center.ToCompactString(), *Hinge.ToCompactString());
+}
+
+#if WITH_EDITOR
+void AMegaCharacter::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	// Live tuning: re-place the TOOL whenever one of its settings is edited.
+	if (PropertyChangedEvent.MemberProperty && PropertyChangedEvent.MemberProperty->GetName().StartsWith(TEXT("Tool")))
+	{
+		ApplyToolLayout();
+	}
+}
+#endif
 
 void AMegaCharacter::BeginPlay()
 {
@@ -56,6 +143,8 @@ void AMegaCharacter::BeginPlay()
 	const float HalfHeight = GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 	SmoothedEyeHeightAboveFeet = 2.f * HalfHeight - EyeDepthBelowCapsuleTop;
 	FirstPersonCamera->SetFieldOfView(BaseFieldOfView);
+
+	ApplyToolLayout();
 }
 
 // ---------------------------------------------------------------------------------------------
