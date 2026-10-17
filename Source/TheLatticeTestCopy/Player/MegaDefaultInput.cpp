@@ -45,6 +45,8 @@ FMegaDefaultInput FMegaDefaultInput::Create(UObject* Outer)
 	Result.Dash = MakeAction(Outer, TEXT("IA_Dash"), EInputActionValueType::Boolean);
 	Result.Slide = MakeAction(Outer, TEXT("IA_Slide"), EInputActionValueType::Boolean);
 	Result.Grapple = MakeAction(Outer, TEXT("IA_Grapple"), EInputActionValueType::Boolean);
+	Result.Fire = MakeAction(Outer, TEXT("IA_Fire"), EInputActionValueType::Boolean);
+	Result.Reload = MakeAction(Outer, TEXT("IA_Reload"), EInputActionValueType::Boolean);
 
 	// Note: each MapKey may reallocate the mapping array, so each returned reference is used
 	// immediately and never kept across MapKey calls.
@@ -79,6 +81,12 @@ FMegaDefaultInput FMegaDefaultInput::Create(UObject* Outer)
 
 	Context->MapKey(Result.Grapple, EKeys::F);
 	Context->MapKey(Result.Grapple, EKeys::Gamepad_RightShoulder);
+
+	Context->MapKey(Result.Fire, EKeys::LeftMouseButton);
+	Context->MapKey(Result.Fire, EKeys::Gamepad_RightTrigger);
+
+	Context->MapKey(Result.Reload, EKeys::R);
+	Context->MapKey(Result.Reload, EKeys::Gamepad_FaceButton_Left);
 
 	return Result;
 }

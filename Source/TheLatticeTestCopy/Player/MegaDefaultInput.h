@@ -19,6 +19,8 @@ class UInputMappingContext;
  *   Dash   Left Shift           | Left bumper
  *   Slide  Left ALT             | B / Circle     (moving: slide, still: crouch, air: slam)
  *   Grapple F                   | RB / R1
+ *   Fire   Left mouse           | RT / R2
+ *   Reload R                    | X / Square
  */
 struct FMegaDefaultInput
 {
@@ -29,6 +31,8 @@ struct FMegaDefaultInput
 	UInputAction* Dash = nullptr;
 	UInputAction* Slide = nullptr;
 	UInputAction* Grapple = nullptr;
+	UInputAction* Fire = nullptr;
+	UInputAction* Reload = nullptr;
 
 	/** Creates transient actions and a mapping context owned by Outer. */
 	static FMegaDefaultInput Create(UObject* Outer);

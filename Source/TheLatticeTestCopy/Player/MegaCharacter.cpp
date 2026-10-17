@@ -3,14 +3,16 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/StaticMeshComponent.h"
+#include "Animation/AnimSequence.h"
 #include "Engine/LocalPlayer.h"
-#include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/CollisionProfile.h"
 #include "GameFramework/PlayerController.h"
 #include "InputActionValue.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "TimerManager.h"
 #include "Player/MegaCharacterMovementComponent.h"
 #include "Player/MegaDefaultInput.h"
 #include "Player/MegaGrappleComponent.h"
@@ -47,80 +49,161 @@ AMegaCharacter::AMegaCharacter(const FObjectInitializer& ObjectInitializer)
 	Grapple->SetupAttachment(FirstPersonCamera);
 	Grapple->SetRelativeLocation(FVector(30.f, 22.f, -22.f)); // lower right, like a hand
 
-	// The TOOL: a forearm weapon made of three static meshes under one pivot.
+	// The TOOL: the forearm weapon. ToolRoot is its pivot on the camera; ToolMesh is the rigged mesh.
 	ToolRoot = CreateDefaultSubobject<USceneComponent>(TEXT("ToolRoot"));
 	ToolRoot->SetupAttachment(FirstPersonCamera);
 
-	auto MakeToolPart = [this](const TCHAR* Name)
-	{
-		UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
-		Part->SetupAttachment(ToolRoot);
-		Part->SetOnlyOwnerSee(true);            // viewmodel: only the player sees it
-		Part->SetCastShadow(false);             // a floating arm-weapon shadow would look wrong
-		Part->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
-		Part->SetGenerateOverlapEvents(false);
-		return Part;
-	};
-	ToolFrontCuff = MakeToolPart(TEXT("ToolFrontCuff"));
-	ToolRearCuff = MakeToolPart(TEXT("ToolRearCuff"));
-	ToolScreen = MakeToolPart(TEXT("ToolScreen"));
+	ToolMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("ToolMesh"));
+	ToolMesh->SetupAttachment(ToolRoot);
+	ToolMesh->SetOnlyOwnerSee(true);            // viewmodel: only the player sees it
+	ToolMesh->SetCastShadow(false);             // a floating arm-weapon shadow would look wrong
+	ToolMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	ToolMesh->SetGenerateOverlapEvents(false);
+	// Keep animating even if the engine thinks the mesh is off screen (it's always in front of the camera).
+	ToolMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 
-	ToolFrontCuffMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_FrontCuff.SM_TOOL_FrontCuff")));
-	ToolRearCuffMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_RearCuff.SM_TOOL_RearCuff")));
-	ToolScreenMesh = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Tool/SM_TOOL_Screen.SM_TOOL_Screen")));
+	// Default asset paths (right-click an asset in the Content Browser > Copy Reference to get these).
+	ToolMeshAsset = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Tool/SK_TOOL.SK_TOOL")));
+	ToolIdleAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(TEXT("/Game/Tool/SK_TOOL_Anim_Armature_TOOL_Idle.SK_TOOL_Anim_Armature_TOOL_Idle")));
+	ToolFireAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(TEXT("/Game/Tool/SK_TOOL_Anim_Armature_TOOL_Fire.SK_TOOL_Anim_Armature_TOOL_Fire")));
+	ToolReloadAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(TEXT("/Game/Tool/SK_TOOL_Anim_Armature_TOOL_Reload.SK_TOOL_Anim_Armature_TOOL_Reload")));
 
 	// The full-body mesh (if any) is for shadows/mirrors only.
 	GetMesh()->SetOwnerNoSee(true);
 }
 
+// ---------------------------------------------------------------------------------------------
+// TOOL (forearm weapon)
+// ---------------------------------------------------------------------------------------------
+
+namespace
+{
+	/** Loads a soft reference, logging (instead of crashing) if the asset is missing or renamed. */
+	template <typename T>
+	T* LoadToolAsset(const TSoftObjectPtr<T>& Ref)
+	{
+		if (Ref.IsNull())
+		{
+			return nullptr;
+		}
+		T* Asset = Ref.LoadSynchronous();
+		if (!Asset)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("TOOL: could not load %s (imported and saved?)"), *Ref.ToString());
+		}
+		return Asset;
+	}
+}
+
 void AMegaCharacter::ApplyToolLayout()
 {
-	if (!ToolRoot)
+	if (!ToolRoot || !ToolMesh)
 	{
 		return;
 	}
 
+	// 1) Placement: ToolRoot sits on the camera; the mesh's origin (the attach point) sits on ToolRoot.
 	ToolRoot->SetRelativeLocationAndRotation(ToolOffset, ToolRotation);
 	ToolRoot->SetRelativeScale3D(FVector(ToolScale));
 
-	// Soft references so a missing/renamed asset just logs a warning instead of breaking the character.
-	auto LoadPart = [](UStaticMeshComponent* Part, const TSoftObjectPtr<UStaticMesh>& MeshRef) -> UStaticMesh*
+	// 2) Assets.
+	USkeletalMesh* ToolSkeletalMesh = LoadToolAsset(ToolMeshAsset);
+	ToolMesh->SetSkeletalMeshAsset(ToolSkeletalMesh);
+	LoadedIdleAnim = LoadToolAsset(ToolIdleAnim);
+	LoadedFireAnim = LoadToolAsset(ToolFireAnim);
+	LoadedReloadAnim = LoadToolAsset(ToolReloadAnim);
+
+	// 3) PS1-style stepping: the mesh (and so its animation) only updates ToolAnimStepRate times a second.
+	ToolMesh->SetComponentTickInterval(ToolAnimStepRate > 0.f ? 1.f / ToolAnimStepRate : 0.f);
+
+	// 4) Glow: find the material slot that has the glow parameter and give it a per-character dynamic copy.
+	ToolGlowMaterial = nullptr;
+	for (int32 Index = 0; Index < ToolMesh->GetNumMaterials(); ++Index)
 	{
-		UStaticMesh* Mesh = MeshRef.IsNull() ? nullptr : MeshRef.LoadSynchronous();
-		if (!Mesh && !MeshRef.IsNull())
+		UMaterialInterface* Material = ToolMesh->GetMaterial(Index);
+		float Value = 0.f;
+		if (Material && Material->GetScalarParameterValue(FMaterialParameterInfo(ToolGlowParameter), Value))
 		{
-			UE_LOG(LogTemp, Warning, TEXT("TOOL: could not load %s (imported and saved?)"), *MeshRef.ToString());
+			ToolGlowMaterial = ToolMesh->CreateDynamicMaterialInstance(Index, Material);
+			ToolGlowBase = Value;
+			break;
 		}
-		Part->SetStaticMesh(Mesh);
-		return Mesh;
-	};
-	const UStaticMesh* Front = LoadPart(ToolFrontCuff, ToolFrontCuffMesh);
-	const UStaticMesh* Rear = LoadPart(ToolRearCuff, ToolRearCuffMesh);
-	LoadPart(ToolScreen, ToolScreenMesh);
-
-	// Cuffs share one pivot (wherever Blender's world origin was). Optionally shift them so the rear cuff
-	// sits on ToolRoot regardless of where the model was built.
-	FBox CuffBounds(ForceInit);
-	if (Front) { CuffBounds += Front->GetBoundingBox(); }
-	if (Rear) { CuffBounds += Rear->GetBoundingBox(); }
-	const FVector Center = (bCenterToolOnRearCuff && Rear) ? Rear->GetBoundingBox().GetCenter() : FVector::ZeroVector;
-
-	ToolFrontCuff->SetRelativeLocation(-Center);
-	ToolRearCuff->SetRelativeLocation(-Center);
-
-	// Blender and Unreal disagree on the Y axis direction, so the hinge is normally (X, -Y, Z) in Unreal.
-	// Pick whichever reading actually lands on the cuffs, in case the importer didn't flip it.
-	const FVector HingeFlipped(ToolScreenHingeBlender.X, -ToolScreenHingeBlender.Y, ToolScreenHingeBlender.Z);
-	FVector Hinge = HingeFlipped;
-	if (CuffBounds.IsValid &&
-		CuffBounds.ComputeSquaredDistanceToPoint(ToolScreenHingeBlender) < CuffBounds.ComputeSquaredDistanceToPoint(HingeFlipped))
-	{
-		Hinge = ToolScreenHingeBlender;
 	}
-	ToolScreen->SetRelativeLocationAndRotation(Hinge - Center, ToolScreenRotation);
 
-	UE_LOG(LogTemp, Log, TEXT("TOOL: cuff bounds size %s cm, recentered by %s, screen hinge %s"),
-		*CuffBounds.GetSize().ToCompactString(), *Center.ToCompactString(), *Hinge.ToCompactString());
+	// 5) Start in idle.
+	GetWorldTimerManager().ClearTimer(ToolActionTimer);
+	ToolAction = EToolAction::Idle;
+	ToolGlowFlash = 0.f;
+	PlayToolAnim(LoadedIdleAnim, true);
+
+	if (ToolSkeletalMesh)
+	{
+		UE_LOG(LogTemp, Log, TEXT("TOOL: %s loaded, size %s cm, glow parameter %s"),
+			*ToolSkeletalMesh->GetName(), *ToolSkeletalMesh->GetBounds().GetBox().GetSize().ToCompactString(),
+			ToolGlowMaterial ? TEXT("found") : TEXT("NOT found"));
+	}
+}
+
+float AMegaCharacter::PlayToolAnim(UAnimSequence* Anim, bool bLoop)
+{
+	if (!ToolMesh || !Anim)
+	{
+		return 0.f;
+	}
+	// Single-node mode: the mesh plays one animation asset directly, no Animation Blueprint required.
+	ToolMesh->PlayAnimation(Anim, bLoop);
+	return Anim->GetPlayLength();
+}
+
+bool AMegaCharacter::ToolFire()
+{
+	const float Now = GetWorld()->GetTimeSeconds();
+	if (ToolAction == EToolAction::Reloading || Now - LastToolFireTime < ToolFireCooldown)
+	{
+		return false;
+	}
+	LastToolFireTime = Now;
+
+	// Restarting the fire animation on every shot is intentional: rapid clicks re-kick the recoil.
+	ToolAction = EToolAction::Firing;
+	const float Length = PlayToolAnim(LoadedFireAnim, false);
+	GetWorldTimerManager().SetTimer(ToolActionTimer, this, &AMegaCharacter::OnToolActionFinished, FMath::Max(Length, 0.01f), false);
+
+	ToolGlowFlash = 1.f;
+	return true;
+}
+
+bool AMegaCharacter::ToolReload()
+{
+	if (ToolAction == EToolAction::Reloading)
+	{
+		return false;
+	}
+
+	ToolAction = EToolAction::Reloading;
+	const float Length = PlayToolAnim(LoadedReloadAnim, false);
+	GetWorldTimerManager().SetTimer(ToolActionTimer, this, &AMegaCharacter::OnToolActionFinished, FMath::Max(Length, 0.01f), false);
+	return true;
+}
+
+void AMegaCharacter::OnToolActionFinished()
+{
+	// Fire/reload finished: go back to the idle loop.
+	ToolAction = EToolAction::Idle;
+	PlayToolAnim(LoadedIdleAnim, true);
+}
+
+void AMegaCharacter::UpdateToolGlow(float DeltaSeconds)
+{
+	if (!ToolGlowMaterial || ToolGlowFlash <= 0.f)
+	{
+		return;
+	}
+
+	// Flash fades linearly from 1 to 0; the glow goes from Boost x normal back to normal.
+	ToolGlowFlash = FMath::Max(0.f, ToolGlowFlash - DeltaSeconds * ToolGlowFlashDecay);
+	const float Multiplier = FMath::Lerp(1.f, ToolFireGlowBoost, ToolGlowFlash);
+	ToolGlowMaterial->SetScalarParameterValue(ToolGlowParameter, ToolGlowBase * Multiplier);
 }
 
 #if WITH_EDITOR
@@ -128,8 +211,9 @@ void AMegaCharacter::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
-	// Live tuning: re-place the TOOL whenever one of its settings is edited.
-	if (PropertyChangedEvent.MemberProperty && PropertyChangedEvent.MemberProperty->GetName().StartsWith(TEXT("Tool")))
+	// Live tuning during Play (F8): re-apply the TOOL whenever one of its settings is edited.
+	if (HasActorBegunPlay() && PropertyChangedEvent.MemberProperty &&
+		PropertyChangedEvent.MemberProperty->GetName().StartsWith(TEXT("Tool")))
 	{
 		ApplyToolLayout();
 	}
@@ -153,7 +237,8 @@ void AMegaCharacter::BeginPlay()
 
 void AMegaCharacter::EnsureInputAssets()
 {
-	if (DefaultMappingContext && MoveAction && LookAction && JumpAction && DashAction && SlideAction && GrappleAction)
+	if (DefaultMappingContext && MoveAction && LookAction && JumpAction && DashAction && SlideAction && GrappleAction &&
+		FireAction && ReloadAction)
 	{
 		return;
 	}
@@ -167,6 +252,8 @@ void AMegaCharacter::EnsureInputAssets()
 	if (!DashAction) { DashAction = Defaults.Dash; }
 	if (!SlideAction) { SlideAction = Defaults.Slide; }
 	if (!GrappleAction) { GrappleAction = Defaults.Grapple; }
+	if (!FireAction) { FireAction = Defaults.Fire; }
+	if (!ReloadAction) { ReloadAction = Defaults.Reload; }
 }
 
 void AMegaCharacter::PawnClientRestart()
@@ -200,6 +287,8 @@ void AMegaCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	Input->BindAction(SlideAction, ETriggerEvent::Canceled, this, &AMegaCharacter::Input_SlideReleased);
 	Input->BindAction(GrappleAction, ETriggerEvent::Started, this, &AMegaCharacter::Input_GrapplePressed);
 	Input->BindAction(GrappleAction, ETriggerEvent::Completed, this, &AMegaCharacter::Input_GrappleReleased);
+	Input->BindAction(FireAction, ETriggerEvent::Started, this, &AMegaCharacter::Input_Fire);
+	Input->BindAction(ReloadAction, ETriggerEvent::Started, this, &AMegaCharacter::Input_Reload);
 }
 
 void AMegaCharacter::Input_Move(const FInputActionValue& Value)
@@ -279,6 +368,16 @@ void AMegaCharacter::Input_GrappleReleased(const FInputActionValue& Value)
 	}
 }
 
+void AMegaCharacter::Input_Fire(const FInputActionValue& Value)
+{
+	ToolFire();
+}
+
+void AMegaCharacter::Input_Reload(const FInputActionValue& Value)
+{
+	ToolReload();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tick / camera
 // ---------------------------------------------------------------------------------------------
@@ -305,6 +404,7 @@ void AMegaCharacter::Tick(float DeltaSeconds)
 	}
 
 	UpdateCamera(DeltaSeconds);
+	UpdateToolGlow(DeltaSeconds);
 }
 
 void AMegaCharacter::Landed(const FHitResult& Hit)
